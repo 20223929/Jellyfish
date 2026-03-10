@@ -66,7 +66,18 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 - API 文档：http://localhost:8000/docs  
 - 健康检查：http://localhost:8000/health  
-- API v1 示例：http://localhost:8000/api/v1/example/prompt
+- API v1 示例：http://localhost:8000/api/v1/example/prompt  
+- 影视技能（确认路由）：http://localhost:8000/api/v1/film （GET）；实体/分镜抽取见下方，需 **POST** 且路径带 **/api/v1** 前缀。
+
+### 影视技能 API（需配置 OPENAI_API_KEY）
+
+| 方法 | 完整路径 | 说明 |
+|------|----------|------|
+| GET  | `/api/v1/film` | 返回端点说明，用于确认路由已注册 |
+| POST | `/api/v1/film/extract/entities` | 人物/地点/道具抽取 |
+| POST | `/api/v1/film/extract/shotlist` | 分镜/镜头表抽取 |
+
+未配置 `OPENAI_API_KEY` 时上述 POST 返回 503。
 
 ## 常用命令
 

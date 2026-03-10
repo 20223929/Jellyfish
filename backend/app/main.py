@@ -35,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
+# 影视技能路由同时挂到主应用，保证 /api/v1/film 一定可访问
 
 
 @app.get("/health")
