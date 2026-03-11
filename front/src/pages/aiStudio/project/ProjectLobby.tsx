@@ -27,8 +27,9 @@ import {
   BarsOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import api from '../../../services/aiStudioApi'
 import { projects as mockProjects, type Project } from '../../../mocks/data'
+import { StudioProjectsService } from '../../../services/generated'
+import type { ProjectRead, ProjectStyle } from '../../../services/generated'
 
 type ViewMode = 'grid' | 'compact' | 'large'
 type FilterTab = 'all' | 'inProgress' | 'completed' | 'mine' | 'recent'
@@ -40,7 +41,7 @@ const ProjectLobby: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
-  const [filterTab, setFilterTab] = useState<FilterTab>('inProgress')
+  const [filterTab, setFilterTab] = useState<FilterTab>('all')
   const [sortKey, setSortKey] = useState<SortKey>('updatedAt')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
@@ -54,14 +55,55 @@ const ProjectLobby: React.FC = () => {
 
   const useMock = import.meta.env.VITE_USE_MOCK === 'true'
 
+  const toUIProject = (p: ProjectRead): Project => {
+    const stats = (p.stats ?? {}) as Record<string, unknown>
+    const getNum = (key: string) => {
+      const v = stats[key]
+      return typeof v === 'number' && Number.isFinite(v) ? v : 0
+    }
+
+    const updatedAt =
+      (typeof stats.updated_at === 'string' && stats.updated_at) ||
+      (typeof stats.updatedAt === 'string' && stats.updatedAt) ||
+      new Date().toISOString()
+
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description ?? '',
+      style: (p.style as Project['style']) ?? '现实主义',
+      seed: p.seed ?? 0,
+      unifyStyle: p.unify_style ?? true,
+      progress: p.progress ?? 0,
+      stats: {
+        chapters: getNum('chapters'),
+        roles: getNum('roles'),
+        scenes: getNum('scenes'),
+        props: getNum('props'),
+      },
+      updatedAt,
+    }
+  }
+
+  const newProjectId = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+    return `p_${Date.now()}_${Math.random().toString(16).slice(2)}`
+  }
+
   const load = async () => {
     setLoading(true)
     try {
       if (useMock) {
         setProjects(mockProjects)
       } else {
-        const list = await api.projects.list()
-        setProjects(Array.isArray(list) ? list : [])
+        const res = await StudioProjectsService.listProjectsApiV1StudioProjectsGet({
+          page: 1,
+          pageSize: 10,
+        })
+        const items = res.data?.items ?? []
+        setProjects(items.map(toUIProject))
       }
     } catch {
       setProjects(useMock ? mockProjects : [])
@@ -149,7 +191,11 @@ const ProjectLobby: React.FC = () => {
   const handleBatchDelete = async () => {
     if (!selectedIds.length) return
     try {
-      await Promise.all(selectedIds.map((id) => api.projects.delete(id)))
+      await Promise.all(
+        selectedIds.map((id) =>
+          StudioProjectsService.deleteProjectApiV1StudioProjectsProjectIdDelete({ projectId: id }),
+        ),
+      )
       setProjects((prev) =>
         Array.isArray(prev) ? prev.filter((p) => !selectedIds.includes(p.id)) : prev
       )
@@ -178,17 +224,25 @@ const ProjectLobby: React.FC = () => {
     unifyStyle: boolean
   }) => {
     try {
-      const created = await api.projects.create({
-        name: values.name,
-        description: values.description ?? '',
-        style: values.style as Project['style'],
-        seed: values.seed,
-        unifyStyle: values.unifyStyle,
+      const createdId = newProjectId()
+      const res = await StudioProjectsService.createProjectApiV1StudioProjectsPost({
+        requestBody: {
+          id: createdId,
+          name: values.name,
+          description: values.description ?? '',
+          style: values.style as ProjectStyle,
+          seed: values.seed,
+          unify_style: values.unifyStyle,
+          progress: 0,
+        },
       })
+      const created = res.data
+      if (!created) throw new Error('empty project')
+      const ui = toUIProject(created)
       message.success('项目创建成功')
       setCreateModalOpen(false)
-      setProjects((prev) => (Array.isArray(prev) ? [...prev, created] : [created]))
-      navigate(`/projects/${created.id}`)
+      setProjects((prev) => (Array.isArray(prev) ? [...prev, ui] : [ui]))
+      navigate(`/projects/${ui.id}`)
     } catch {
       message.error('创建失败')
     }
@@ -216,18 +270,24 @@ const ProjectLobby: React.FC = () => {
   }) => {
     if (!editingProject) return
     try {
-      const updated = await api.projects.update(editingProject.id, {
-        name: values.name,
-        description: values.description ?? '',
-        style: values.style as Project['style'],
-        seed: values.seed,
-        unifyStyle: values.unifyStyle,
+      const res = await StudioProjectsService.updateProjectApiV1StudioProjectsProjectIdPatch({
+        projectId: editingProject.id,
+        requestBody: {
+          name: values.name,
+          description: values.description ?? '',
+          style: values.style as ProjectStyle,
+          seed: values.seed,
+          unify_style: values.unifyStyle,
+        },
       })
+      const updated = res.data
+      if (!updated) throw new Error('empty project')
+      const ui = toUIProject(updated)
       message.success('项目已更新')
       setEditModalOpen(false)
       setEditingProject(null)
       setProjects((prev) =>
-        Array.isArray(prev) ? prev.map((x) => (x.id === updated.id ? updated : x)) : prev
+        Array.isArray(prev) ? prev.map((x) => (x.id === ui.id ? ui : x)) : prev
       )
     } catch {
       message.error('更新失败')
@@ -236,7 +296,7 @@ const ProjectLobby: React.FC = () => {
 
   const handleDelete = async (projectId: string) => {
     try {
-      await api.projects.delete(projectId)
+      await StudioProjectsService.deleteProjectApiV1StudioProjectsProjectIdDelete({ projectId })
       message.success('已删除')
       setProjects((prev) => (Array.isArray(prev) ? prev.filter((p) => p.id !== projectId) : []))
     } catch {
@@ -251,11 +311,27 @@ const ProjectLobby: React.FC = () => {
     return <Tag color="orange">进行中</Tag>
   }
 
-  const gradientClassByStyle: Record<Project['style'], string> = {
-    现实主义: 'from-slate-900 via-slate-800 to-slate-700',
-    科幻: 'from-indigo-600 via-purple-600 to-cyan-500',
-    古风: 'from-amber-700 via-rose-600 to-emerald-600',
-    都市喜剧: 'from-orange-500 via-pink-500 to-yellow-400',
+  /**
+   * 根据项目 ID 生成稳定的浅色渐变背景，避免深色背景。
+   */
+  const getLightGradientByProjectId = (id: string): string => {
+    const gradients = [
+      'from-sky-100 via-sky-50 to-white',
+      'from-emerald-100 via-emerald-50 to-white',
+      'from-indigo-100 via-indigo-50 to-white',
+      'from-amber-100 via-amber-50 to-white',
+      'from-rose-100 via-rose-50 to-white',
+      'from-violet-100 via-violet-50 to-white',
+      'from-teal-100 via-teal-50 to-white',
+    ]
+
+    let hash = 0
+    for (let i = 0; i < id.length; i += 1) {
+      hash = (hash * 31 + id.charCodeAt(i)) >>> 0
+    }
+
+    const index = hash % gradients.length
+    return gradients[index]
   }
 
   const selectedProject = filteredSorted.find((p) => p.id === selectedProjectId) ?? filteredSorted[0]
@@ -291,13 +367,15 @@ const ProjectLobby: React.FC = () => {
         onMouseEnter={() => handleSelectProject(p.id)}
       >
         <div
-          className={`relative mb-2 rounded-md bg-gradient-to-r ${gradientClassByStyle[p.style]} text-white p-2.5 overflow-hidden`}
+          className={`relative mb-2 rounded-md bg-gradient-to-r ${getLightGradientByProjectId(
+            p.id,
+          )} text-gray-900 p-2.5 overflow-hidden`}
         >
           <div className="flex justify-between items-start gap-2">
             <div className="min-w-0">
-              <div className="text-xs opacity-80 mb-0.5">{p.style}</div>
-              <div className="text-base font-semibold truncate">{p.name}</div>
-              <div className="text-[11px] opacity-80 truncate">
+              <div className="text-xs text-gray-500 mb-0.5">{p.style}</div>
+              <div className="text-base font-semibold truncate text-gray-900">{p.name}</div>
+              <div className="text-[11px] text-gray-500 truncate">
                 {p.updatedAt}
               </div>
             </div>
@@ -617,6 +695,7 @@ const ProjectLobby: React.FC = () => {
           initialValues={{
             style: '现实主义',
             seed: Math.floor(Math.random() * 99999),
+            visual_style: '动漫',
             unifyStyle: true,
           }}
         >
@@ -637,6 +716,14 @@ const ProjectLobby: React.FC = () => {
                 { value: '科幻', label: '科幻' },
                 { value: '古风', label: '古风' },
                 { value: '都市喜剧', label: '都市喜剧' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="visual_style" label="视觉风格" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: '动漫', label: '动漫' },
+                { value: '真人', label: '真人' },
               ]}
             />
           </Form.Item>
@@ -689,9 +776,6 @@ const ProjectLobby: React.FC = () => {
             <Select
               options={[
                 { value: '现实主义', label: '现实主义' },
-                { value: '科幻', label: '科幻' },
-                { value: '古风', label: '古风' },
-                { value: '都市喜剧', label: '都市喜剧' },
               ]}
             />
           </Form.Item>

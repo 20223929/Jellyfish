@@ -21,8 +21,13 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./jellyfish.db"
 
-    # CORS
-    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    # CORS：本地开发默认允许 Vite 常用端口
+    cors_origins: list[str] = [
+        "http://localhost:7788",
+        "http://127.0.0.1:7788",
+        "http://localhost:7788",
+        "http://127.0.0.1:7788",
+    ]
 
     # LLM（影视技能抽取用，可选）
     openai_api_key: str | None = None

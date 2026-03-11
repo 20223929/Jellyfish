@@ -7,6 +7,7 @@ import App from './App.tsx'
 import 'antd/dist/reset.css'
 import './index.css'
 import './i18n'
+import './services/openapi'
 import { useAppStore } from './store/useAppStore'
 
 const RootApp: React.FC = () => {
