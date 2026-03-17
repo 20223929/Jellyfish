@@ -528,7 +528,7 @@ async def create_actor_image_generation_task(
         fallback_prompt=actor_image.description,
         not_found_msg="ActorImage.description is empty",
     )
-    
+
     created = await _create_image_task_and_link(
         db=db,
         model_id=body.model_id,
