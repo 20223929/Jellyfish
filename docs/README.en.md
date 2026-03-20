@@ -96,12 +96,16 @@ The project is **actively developed**. Below is the current completion and plann
 | Chapter production workspace | Full storyboard editing, video generation, and preview (deepening features) |
 | Advanced prompts | Advanced prompt templates and smart fill for storyboard/character/scene (planned) |
 
-## 📄 License
+## Developer
+
+The project is still under development. Core workflows and data models have not yet stabilized. For now, we do not provide a deployment option, and we have temporarily paused PR submissions. We plan to reopen after the beta release in early April.
+
+## 📄 Open-source License / License
 
 This project is licensed under [Apache-2.0](../LICENSE).  
-Pull requests, issues, and stars are welcome. We aim to turn this into a practical, industry-ready tool for AI short drama production.
+We welcome Pull Requests, Issues, and Stars, and we will work with the community to turn this AI short drama production tool into a practical, industry-ready solution.
 
 ## 💬 Community & feedback
 
-- **[GitHub Issues](https://github.com/your-org/jellyfish/issues)** — Feature ideas, bug reports, and discussions
-- **WeChat / Discord** — To be set up; links will be added here later
+- **[GitHub Issues](https://github.com/your-org/jellyfish/issues)** — Feature suggestions, bug reports, and usage discussions
+- **WeChat / Discord** — To be set up; we will update the entry on this page later
