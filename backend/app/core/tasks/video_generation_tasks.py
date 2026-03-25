@@ -2,12 +2,14 @@
 
 说明：
 - 本模块提供 BaseTask 协议实现，便于接入 TaskManager/路由的 async_polling 模式。
-- 任务输入支持：文本 prompt，以及可选的首帧/尾帧/关键帧参考图（file_id 或 url）。
+- 任务输入支持：文本 prompt，以及可选的首帧/尾帧/关键帧参考图（base64 或 data URL）。
 - 任务输出为：视频 url 和/或 file_id（若上层将视频落库为 FileItem）。
 """
 
 from __future__ import annotations
 
+import asyncio
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Literal, Optional
 
@@ -18,19 +20,31 @@ from app.core.task_manager.types import BaseTask
 ProviderKey = Literal["openai", "volcengine"]
 
 
+def _strip_optional_b64(value: str | None) -> str | None:
+    if value is None:
+        return None
+    s = value.strip()
+    return s if s else None
+
+
+def _to_image_data_url(value: str) -> str:
+    """将参考图规范为 data URL，供 OpenAI image_url 或火山 url 字段使用。"""
+    v = value.strip()
+    if v.startswith("data:image/"):
+        return v
+    return f"data:image/png;base64,{v}"
+
+
 class VideoGenerationInput(BaseModel):
-    """视频生成输入：支持文本提示词 + 可选的三种帧参考图。"""
+    """视频生成输入：支持文本提示词 + 可选的三种帧参考图（纯 base64 或 data URL）。"""
 
     model_config = ConfigDict(extra="forbid")
 
     prompt: Optional[str] = Field(None, description="文本提示词；可与参考图二选一或同时存在")
 
-    first_frame_file_id: Optional[str] = Field(None, description="首帧图片 file_id（可选）")
-    first_frame_url: Optional[str] = Field(None, description="首帧图片 URL（可选）")
-    last_frame_file_id: Optional[str] = Field(None, description="尾帧图片 file_id（可选）")
-    last_frame_url: Optional[str] = Field(None, description="尾帧图片 URL（可选）")
-    key_frame_file_id: Optional[str] = Field(None, description="关键帧图片 file_id（可选）")
-    key_frame_url: Optional[str] = Field(None, description="关键帧图片 URL（可选）")
+    first_frame_base64: Optional[str] = Field(None, description="首帧图：纯 base64 或 data:image/...;base64,...")
+    last_frame_base64: Optional[str] = Field(None, description="尾帧图：纯 base64 或 data URL")
+    key_frame_base64: Optional[str] = Field(None, description="关键帧图：纯 base64 或 data URL")
 
     # 通用可选参数（供应商可选择支持/忽略）
     model: Optional[str] = Field(None, description="视频模型名称（可选，供应商透传）")
@@ -42,16 +56,13 @@ class VideoGenerationInput(BaseModel):
         has_prompt = bool((self.prompt or "").strip())
         has_ref = any(
             [
-                self.first_frame_file_id,
-                self.first_frame_url,
-                self.last_frame_file_id,
-                self.last_frame_url,
-                self.key_frame_file_id,
-                self.key_frame_url,
+                _strip_optional_b64(self.first_frame_base64),
+                _strip_optional_b64(self.last_frame_base64),
+                _strip_optional_b64(self.key_frame_base64),
             ]
         )
         if not has_prompt and not has_ref:
-            raise ValueError("Require prompt or at least one reference frame (file_id/url)")
+            raise ValueError("Require prompt or at least one reference frame (base64)")
         return self
 
 
@@ -82,29 +93,68 @@ class ProviderConfig:
     base_url: str | None = None
 
 
-def _pick_openai_reference(input_: VideoGenerationInput) -> dict[str, str] | None:
-    """将多参考图收敛为 OpenAI 允许的单一 input_reference。
+def _volcengine_ratio(size: str | None) -> str:
+    """方舟 Seedance 等使用 ratio；分辨率字符串（如 720x1280）则回退为 adaptive。"""
+    if not size or not str(size).strip():
+        return "adaptive"
+    s = str(size).strip()
+    if s.lower() == "adaptive" or ":" in s:
+        return s
+    return "adaptive"
 
-优先级：key_frame > first_frame > last_frame；每类优先 file_id，其次 url。
-"""
 
-    if input_.key_frame_file_id:
-        return {"file_id": input_.key_frame_file_id}
-    if input_.key_frame_url:
-        return {"image_url": input_.key_frame_url}
-    if input_.first_frame_file_id:
-        return {"file_id": input_.first_frame_file_id}
-    if input_.first_frame_url:
-        return {"image_url": input_.first_frame_url}
-    if input_.last_frame_file_id:
-        return {"file_id": input_.last_frame_file_id}
-    if input_.last_frame_url:
-        return {"image_url": input_.last_frame_url}
+def _build_volcengine_content(input_: VideoGenerationInput) -> list[dict[str, Any]]:
+    """按方舟视频生成文档组装 content：text + image_url(role=first_frame|last_frame|key_frame)。"""
+    items: list[dict[str, Any]] = []
+    prompt = (input_.prompt or "").strip()
+    if prompt:
+        items.append({"type": "text", "text": prompt})
+
+    ff = _strip_optional_b64(input_.first_frame_base64)
+    if ff:
+        items.append(
+            {
+                "type": "image_url",
+                "role": "first_frame",
+                "image_url": {"url": _to_image_data_url(ff)},
+            }
+        )
+    lf = _strip_optional_b64(input_.last_frame_base64)
+    if lf:
+        items.append(
+            {
+                "type": "image_url",
+                "role": "last_frame",
+                "image_url": {"url": _to_image_data_url(lf)},
+            }
+        )
+    kf = _strip_optional_b64(input_.key_frame_base64)
+    if kf:
+        items.append(
+            {
+                "type": "image_url",
+                "role": "key_frame",
+                "image_url": {"url": _to_image_data_url(kf)},
+            }
+        )
+    return items
+
+
+def _pick_openai_input_reference(input_: VideoGenerationInput) -> dict[str, str] | None:
+    """OpenAI 仅支持单一 input_reference；优先级：key > first > last。"""
+
+    for raw in (
+        _strip_optional_b64(input_.key_frame_base64),
+        _strip_optional_b64(input_.first_frame_base64),
+        _strip_optional_b64(input_.last_frame_base64),
+    ):
+        if raw:
+            return {"image_url": _to_image_data_url(raw)}
     return None
 
 
-class VideoGenerationTask(BaseTask):
-    """视频生成任务（async_result 模式）。"""
+class AbstractVideoGenerationTask(BaseTask, ABC):
+    """视频生成任务基类：公共状态与 run/status/is_done/get_result。"""
 
     def __init__(
         self,
@@ -122,14 +172,21 @@ class VideoGenerationTask(BaseTask):
         self._result: VideoGenerationResult | None = None
         self._error: str = ""
 
+    async def _sleep_poll(self) -> None:
+        await asyncio.sleep(self._poll_interval_s)
+
+    @abstractmethod
+    async def _create_task(self) -> None:
+        """发起供应商创建任务请求，并设置 self._provider_task_id。"""
+
+    @abstractmethod
+    async def _poll_and_get_result(self) -> VideoGenerationResult:
+        """轮询至终态并解析为 VideoGenerationResult。"""
+
     async def run(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any] | None:  # type: ignore[override]
         try:
-            if self._cfg.provider == "openai":
-                self._result = await self._run_openai()
-            elif self._cfg.provider == "volcengine":
-                self._result = await self._run_volcengine()
-            else:
-                raise ValueError(f"Unsupported provider: {self._cfg.provider!r}")
+            await self._create_task()
+            self._result = await self._poll_and_get_result()
         except Exception as exc:  # noqa: BLE001
             self._error = str(exc)
             self._result = None
@@ -152,15 +209,11 @@ class VideoGenerationTask(BaseTask):
     async def get_result(self) -> VideoGenerationResult | None:  # type: ignore[override]
         return self._result
 
-    async def _run_openai(self) -> VideoGenerationResult:
-        """OpenAI Videos API：POST /videos -> 轮询 GET /videos/{id} -> 返回 content endpoint URL。
 
-说明：OpenAI 的 `/videos/{id}/content` 返回视频二进制流；本任务返回该 endpoint URL（需鉴权下载）。
-上层若要落库，可自行下载并创建 FileItem(type=video)，再写入 Shot.generated_video_file_id。
-"""
+class OpenAIVideoGenerationTask(AbstractVideoGenerationTask):
+    """OpenAI Videos API：POST /videos -> 轮询 GET /videos/{id}。"""
 
-        import asyncio
-
+    async def _create_task(self) -> None:
         try:
             import httpx
         except ImportError as e:  # pragma: no cover
@@ -180,7 +233,7 @@ class VideoGenerationTask(BaseTask):
         if self._input.seconds:
             body["seconds"] = str(int(self._input.seconds))
 
-        ref = _pick_openai_reference(self._input)
+        ref = _pick_openai_input_reference(self._input)
         if ref:
             body["input_reference"] = ref
 
@@ -193,12 +246,22 @@ class VideoGenerationTask(BaseTask):
                 raise RuntimeError(f"OpenAI /videos missing id: {data!r}")
             self._provider_task_id = video_id
 
-            status_val = ""
+    async def _poll_and_get_result(self) -> VideoGenerationResult:
+        try:
+            import httpx
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError("httpx is required for video generation tasks") from e
+
+        base_url = (self._cfg.base_url or "https://api.openai.com/v1").rstrip("/")
+        video_id = self._provider_task_id or ""
+        if not video_id:
+            raise RuntimeError("OpenAI poll missing provider task id")
+
+        headers = {"Authorization": f"Bearer {self._cfg.api_key}"}
+        status_val = ""
+        async with httpx.AsyncClient(timeout=self._timeout_s) as client:
             while True:
-                rr = await client.get(
-                    f"{base_url}/videos/{video_id}",
-                    headers={"Authorization": headers["Authorization"]},
-                )
+                rr = await client.get(f"{base_url}/videos/{video_id}", headers=headers)
                 rr.raise_for_status()
                 meta = rr.json()
                 status_val = str(meta.get("status") or "")
@@ -206,7 +269,7 @@ class VideoGenerationTask(BaseTask):
                     if status_val == "failed":
                         raise RuntimeError(f"OpenAI video failed: {meta.get('error')!r}")
                     break
-                await asyncio.sleep(self._poll_interval_s)
+                await self._sleep_poll()
 
         return VideoGenerationResult(
             url=f"{base_url}/videos/{video_id}/content",
@@ -216,17 +279,14 @@ class VideoGenerationTask(BaseTask):
             status=status_val or "completed",
         )
 
-    async def _run_volcengine(self) -> VideoGenerationResult:
-        """火山引擎（方舟）内容生成任务。
 
-Base URL（Apifox 公开文档）：`https://ark.cn-beijing.volces.com/api/v3`
-鉴权：Bearer ARK_API_KEY
+class VolcengineVideoGenerationTask(AbstractVideoGenerationTask):
+    """火山引擎（方舟）内容生成任务。
 
-说明：不同模型的创建请求体字段可能不同；这里采用最小通用字段：prompt，并将 refs 作为 `references` 透传。
-"""
+    创建任务请求体与官方示例一致：content[]（text / image_url+role）、duration、model、ratio。
+    """
 
-        import asyncio
-
+    async def _create_task(self) -> None:
         try:
             import httpx
         except ImportError as e:  # pragma: no cover
@@ -238,32 +298,18 @@ Base URL（Apifox 公开文档）：`https://ark.cn-beijing.volces.com/api/v3`
             "Content-Type": "application/json",
         }
 
-        refs: dict[str, Any] = {}
-        if self._input.first_frame_file_id or self._input.first_frame_url:
-            refs["first_frame"] = {
-                "file_id": self._input.first_frame_file_id,
-                "url": self._input.first_frame_url,
-            }
-        if self._input.last_frame_file_id or self._input.last_frame_url:
-            refs["last_frame"] = {
-                "file_id": self._input.last_frame_file_id,
-                "url": self._input.last_frame_url,
-            }
-        if self._input.key_frame_file_id or self._input.key_frame_url:
-            refs["key_frame"] = {
-                "file_id": self._input.key_frame_file_id,
-                "url": self._input.key_frame_url,
-            }
+        content = _build_volcengine_content(self._input)
+        if not content:
+            raise RuntimeError("Volcengine video requires non-empty content (prompt and/or reference frames)")
 
-        body: dict[str, Any] = {"prompt": self._input.prompt or ""}
+        body: dict[str, Any] = {
+            "content": content,
+            "ratio": _volcengine_ratio(self._input.size),
+        }
         if self._input.model:
             body["model"] = self._input.model
-        if self._input.size:
-            body["size"] = self._input.size
-        if self._input.seconds:
-            body["seconds"] = int(self._input.seconds)
-        if refs:
-            body["references"] = refs
+        if self._input.seconds is not None:
+            body["duration"] = int(self._input.seconds)
 
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
             r = await client.post(f"{base_url}/contents/generations/tasks", headers=headers, json=body)
@@ -274,8 +320,24 @@ Base URL（Apifox 公开文档）：`https://ark.cn-beijing.volces.com/api/v3`
                 raise RuntimeError(f"Volcengine create missing id: {data!r}")
             self._provider_task_id = task_id
 
-            status_val = ""
-            video_url: str | None = None
+    async def _poll_and_get_result(self) -> VideoGenerationResult:
+        try:
+            import httpx
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError("httpx is required for video generation tasks") from e
+
+        base_url = (self._cfg.base_url or "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
+        task_id = self._provider_task_id or ""
+        if not task_id:
+            raise RuntimeError("Volcengine poll missing provider task id")
+
+        headers = {
+            "Authorization": f"Bearer {self._cfg.api_key}",
+            "Content-Type": "application/json",
+        }
+        status_val = ""
+        video_url: str | None = None
+        async with httpx.AsyncClient(timeout=self._timeout_s) as client:
             while True:
                 rr = await client.get(f"{base_url}/contents/generations/tasks/{task_id}", headers=headers)
                 rr.raise_for_status()
@@ -290,10 +352,9 @@ Base URL（Apifox 公开文档）：`https://ark.cn-beijing.volces.com/api/v3`
                     if status_val != "succeeded":
                         raise RuntimeError(f"Volcengine task not succeeded: status={status_val!r} meta={meta!r}")
                     break
-                await asyncio.sleep(self._poll_interval_s)
+                await self._sleep_poll()
 
         if not video_url:
-            # 成功但未返回 video_url：保底返回查询 URL
             video_url = f"{base_url}/contents/generations/tasks/{task_id}"
 
         return VideoGenerationResult(
@@ -304,3 +365,43 @@ Base URL（Apifox 公开文档）：`https://ark.cn-beijing.volces.com/api/v3`
             status=status_val or "succeeded",
         )
 
+
+class VideoGenerationTask(BaseTask):
+    """按 provider 分派到 OpenAI / 火山实现；对外构造函数签名保持不变。"""
+
+    def __init__(
+        self,
+        *,
+        provider_config: ProviderConfig,
+        input_: VideoGenerationInput,
+        poll_interval_s: float = 2.0,
+        timeout_s: float = 120.0,
+    ) -> None:
+        if provider_config.provider == "openai":
+            self._impl: AbstractVideoGenerationTask = OpenAIVideoGenerationTask(
+                provider_config=provider_config,
+                input_=input_,
+                poll_interval_s=poll_interval_s,
+                timeout_s=timeout_s,
+            )
+        elif provider_config.provider == "volcengine":
+            self._impl = VolcengineVideoGenerationTask(
+                provider_config=provider_config,
+                input_=input_,
+                poll_interval_s=poll_interval_s,
+                timeout_s=timeout_s,
+            )
+        else:
+            raise ValueError(f"Unsupported provider: {provider_config.provider!r}")
+
+    async def run(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any] | None:  # type: ignore[override]
+        return await self._impl.run(*args, **kwargs)
+
+    async def status(self) -> dict[str, Any]:  # type: ignore[override]
+        return await self._impl.status()
+
+    async def is_done(self) -> bool:  # type: ignore[override]
+        return await self._impl.is_done()
+
+    async def get_result(self) -> VideoGenerationResult | None:  # type: ignore[override]
+        return await self._impl.get_result()

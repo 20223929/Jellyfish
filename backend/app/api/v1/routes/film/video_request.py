@@ -1,27 +1,20 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
-from .common import BindTarget
+class VideoGenerationTaskRequest(BaseModel):
+    """视频生成任务请求：基于 shot_id 自动组装参考帧与时长。"""
 
+    shot_id: str = Field(..., description="镜头 ID")
+    reference_mode: Literal["first", "last", "key", "first_last", "first_last_key", "text_only"] = Field(
+        ...,
+        description="参考模式：first | last | key | first_last | first_last_key | text_only",
+    )
+    # 文本模式必填；非文本模式可选作为补充描述
+    prompt: str | None = Field(None, description="视频提示词（text_only 必填）")
 
-class VideoGenerationTaskRequest(BindTarget):
-    """视频生成任务请求：可选绑定到 project/chapter/shot。"""
-
-    provider: str = Field(..., description="供应商：openai | volcengine")
-    api_key: str = Field(..., description="供应商 API Key（Bearer）")
-    base_url: str | None = Field(None, description="供应商 base_url（可选）")
-
-    # 输入（与 VideoGenerationInput 对齐）
-    prompt: str | None = Field(None, description="文本提示词（可选）")
-    first_frame_file_id: str | None = Field(None, description="首帧图片 file_id（可选）")
-    first_frame_url: str | None = Field(None, description="首帧图片 URL（可选）")
-    last_frame_file_id: str | None = Field(None, description="尾帧图片 file_id（可选）")
-    last_frame_url: str | None = Field(None, description="尾帧图片 URL（可选）")
-    key_frame_file_id: str | None = Field(None, description="关键帧图片 file_id（可选）")
-    key_frame_url: str | None = Field(None, description="关键帧图片 URL（可选）")
-
-    model: str | None = Field(None, description="视频模型名称（可选）")
     size: str | None = Field(None, description="分辨率（可选），如 720x1280")
-    seconds: int | None = Field(None, description="时长（秒）（可选）")
+    # seconds 由 ShotDetail.duration 自动确定；请求体不再接收覆盖值。
 

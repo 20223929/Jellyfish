@@ -4,6 +4,8 @@
 - 作为 `BaseTask` 实现接入 `TaskManager` 的 async_polling 流程；
 - 提供最小统一输入：prompt / model / size / n / response_format；
 - 输出统一的图片列表（URL 或 base64），供上层自行落库为 FileItem。
+- 供应商无关逻辑在 `AbstractImageGenerationTask`；OpenAI / 火山在子类中实现
+  `_create_task` 与 `_poll_and_get_result`（当前均为单次 HTTP 同步响应，无真实轮询）。
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from abc import ABC, abstractmethod
 from typing import Any, AsyncIterator, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -27,7 +30,7 @@ ResponseFormat = Literal["url", "b64_json"]
 
 
 class InputImageRef(BaseModel):
-    """参考图片引用：统一映射到 OpenAI images[*] 与火山 image[]."""
+    """参考图片引用：统一映射到 OpenAI images[*] 与火山 image[]。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -123,8 +126,52 @@ class ImageGenerationResult(BaseModel):
         return self
 
 
-class ImageGenerationTask(BaseTask):
-    """图片生成任务（async_result 模式）。"""
+def _redact_headers(h: dict[str, str]) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for k, v in (h or {}).items():
+        lk = k.lower()
+        if lk in {"authorization", "x-api-key", "api-key"}:
+            redacted[k] = "***redacted***"
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def _safe_body_for_log_openai(body: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = dict(body or {})
+    if "prompt" in out and isinstance(out["prompt"], str):
+        p = out["prompt"].strip()
+        out["prompt"] = (p[:300] + "...(truncated)") if len(p) > 300 else p
+    imgs = out.get("images")
+    if isinstance(imgs, list):
+        brief: list[dict[str, Any]] = []
+        for it in imgs[:5]:
+            if not isinstance(it, dict):
+                continue
+            image_url = it.get("image_url")
+            file_id = it.get("file_id")
+            brief.append(
+                {
+                    "has_image_url": bool(image_url),
+                    "image_url_prefix": (str(image_url)[:80] + "...")
+                    if isinstance(image_url, str) and len(image_url) > 80
+                    else image_url,
+                    "has_file_id": bool(file_id),
+                }
+            )
+        out["images"] = {
+            "count": len(imgs),
+            "sample": brief,
+        }
+    return out
+
+
+class AbstractImageGenerationTask(BaseTask, ABC):
+    """图片生成抽象基类：初始化、状态、错误处理；子类实现 `_create_task` + `_poll_and_get_result`。
+
+    当前 OpenAI / 火山均为单次 HTTP 同步返回：`_create_task` 完成请求并写入
+    `self._http_json`；`_poll_and_get_result` 仅解析，无 sleep 轮询。
+    """
 
     def __init__(
         self,
@@ -137,17 +184,22 @@ class ImageGenerationTask(BaseTask):
         self._input = input_
         self._timeout_s = timeout_s
         self._provider_task_id: str | None = None
+        self._http_json: dict[str, Any] | None = None
         self._result: ImageGenerationResult | None = None
         self._error: str = ""
 
+    @abstractmethod
+    async def _create_task(self) -> None:
+        """发起供应商请求；成功后将 JSON 放入 `self._http_json`（同步接口）。"""
+
+    @abstractmethod
+    async def _poll_and_get_result(self) -> ImageGenerationResult:
+        """由 `self._http_json` 解析为 `ImageGenerationResult`（当前无轮询循环）。"""
+
     async def run(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any] | None:  # type: ignore[override]
         try:
-            if self._cfg.provider == "openai":
-                self._result = await self._run_openai()
-            elif self._cfg.provider == "volcengine":
-                self._result = await self._run_volcengine()
-            else:
-                raise ValueError(f"Unsupported provider: {self._cfg.provider!r}")
+            await self._create_task()
+            self._result = await self._poll_and_get_result()
         except Exception as exc:  # noqa: BLE001
             self._error = str(exc)
             self._result = None
@@ -170,13 +222,11 @@ class ImageGenerationTask(BaseTask):
     async def get_result(self) -> ImageGenerationResult | None:  # type: ignore[override]
         return self._result
 
-    async def _run_openai(self) -> ImageGenerationResult:
-        """调用 OpenAI Images API。
 
-        - 未提供参考图（images 为空）：POST /images/generations
-        - 提供参考图：POST /images/edits
-        """
+class OpenAIImageGenerationTask(AbstractImageGenerationTask):
+    """OpenAI Images API：无参考图 POST /images/generations；有参考图 POST /images/edits。"""
 
+    async def _create_task(self) -> None:
         try:
             import httpx
         except ImportError as e:  # pragma: no cover
@@ -188,46 +238,8 @@ class ImageGenerationTask(BaseTask):
             "Content-Type": "application/json",
         }
 
-        def _redact_headers(h: dict[str, str]) -> dict[str, str]:
-            redacted: dict[str, str] = {}
-            for k, v in (h or {}).items():
-                lk = k.lower()
-                if lk in {"authorization", "x-api-key", "api-key"}:
-                    redacted[k] = "***redacted***"
-                else:
-                    redacted[k] = v
-            return redacted
-
-        def _safe_body_for_log(body: dict[str, Any]) -> dict[str, Any]:
-            # 避免日志过大与泄露：prompt 截断、images 只保留数量与前几个摘要
-            out: dict[str, Any] = dict(body or {})
-            if "prompt" in out and isinstance(out["prompt"], str):
-                p = out["prompt"].strip()
-                out["prompt"] = (p[:300] + "...(truncated)") if len(p) > 300 else p
-            imgs = out.get("images")
-            if isinstance(imgs, list):
-                brief: list[dict[str, Any]] = []
-                for it in imgs[:5]:
-                    if not isinstance(it, dict):
-                        continue
-                    image_url = it.get("image_url")
-                    file_id = it.get("file_id")
-                    brief.append(
-                        {
-                            "has_image_url": bool(image_url),
-                            "image_url_prefix": (str(image_url)[:80] + "...") if isinstance(image_url, str) and len(image_url) > 80 else image_url,
-                            "has_file_id": bool(file_id),
-                        }
-                    )
-                out["images"] = {
-                    "count": len(imgs),
-                    "sample": brief,
-                }
-            return out
-
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
             if self._input.images:
-                # 使用 Create image edit 接口：/images/edits
                 body: dict[str, Any] = {
                     "prompt": self._input.prompt,
                     "n": self._input.n,
@@ -239,16 +251,8 @@ class ImageGenerationTask(BaseTask):
 
                 body["images"] = [
                     {
-                        **(
-                            {"file_id": ref.file_id}
-                            if ref.file_id
-                            else {}
-                        ),
-                        **(
-                            {"image_url": ref.image_url}
-                            if ref.image_url
-                            else {}
-                        ),
+                        **({"file_id": ref.file_id} if ref.file_id else {}),
+                        **({"image_url": ref.image_url} if ref.image_url else {}),
                     }
                     for ref in self._input.images
                 ]
@@ -260,11 +264,10 @@ class ImageGenerationTask(BaseTask):
                     "openai",
                     url,
                     _redact_headers(headers),
-                    json.dumps(_safe_body_for_log(body), ensure_ascii=False),
+                    json.dumps(_safe_body_for_log_openai(body), ensure_ascii=False),
                 )
                 r = await client.post(url, headers=headers, json=body)
             else:
-                # 无参考图：使用标准的 /images/generations
                 body = {
                     "prompt": self._input.prompt,
                     "n": self._input.n,
@@ -282,12 +285,11 @@ class ImageGenerationTask(BaseTask):
                     "openai",
                     url,
                     _redact_headers(headers),
-                    json.dumps(_safe_body_for_log(body), ensure_ascii=False),
+                    json.dumps(_safe_body_for_log_openai(body), ensure_ascii=False),
                 )
                 r = await client.post(url, headers=headers, json=body)
 
             dt_ms = int((time.perf_counter() - t0) * 1000)
-            # 先读文本用于日志；不消费 stream（httpx 默认已缓冲）
             resp_text = ""
             try:
                 resp_text = r.text or ""
@@ -303,8 +305,10 @@ class ImageGenerationTask(BaseTask):
             )
 
             r.raise_for_status()
-            data = r.json()
+            self._http_json = r.json()
 
+    async def _poll_and_get_result(self) -> ImageGenerationResult:
+        data = self._http_json or {}
         raw_items = data.get("data") or []
         images: list[ImageItem] = []
         for item in raw_items:
@@ -326,16 +330,16 @@ class ImageGenerationTask(BaseTask):
             status=str(data.get("status") or "succeeded"),
         )
 
-    async def _run_volcengine(self) -> ImageGenerationResult:
-        """调用火山引擎方舟 ImageGenerations：POST /v1/images/generations（同步返回）。"""
 
+class VolcengineImageGenerationTask(AbstractImageGenerationTask):
+    """火山引擎方舟 ImageGenerations：POST /images/generations（同步返回）。"""
+
+    async def _create_task(self) -> None:
         try:
             import httpx
         except ImportError as e:  # pragma: no cover
             raise RuntimeError("httpx is required for image generation tasks") from e
 
-        # 参考官方文档/SDK：默认使用方舟 v3 接口前缀 https://ark.cn-beijing.volces.com/api/v3
-        # 若在 ProviderConfig/base_url 中传入自定义前缀，则需保证指向同一版本（例如 /api/v3）。
         base_url = (self._cfg.base_url or "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
         headers = {
             "Authorization": f"Bearer {self._cfg.api_key}",
@@ -343,7 +347,6 @@ class ImageGenerationTask(BaseTask):
         }
 
         body: dict[str, Any] = {
-            # Ark 文档中字段名通常为 "input" 或 "prompt"；这里采用通用 "input"
             "prompt": self._input.prompt,
             "n": self._input.n,
         }
@@ -354,7 +357,6 @@ class ImageGenerationTask(BaseTask):
         if self._input.seed is not None:
             body["seed"] = int(self._input.seed)
         if self._input.images:
-            # 火山 ImageGenerations 使用 image string[]；优先 image_url，其次 file_id。
             body["image"] = [
                 ref.image_url or ref.file_id
                 for ref in self._input.images
@@ -374,10 +376,18 @@ class ImageGenerationTask(BaseTask):
                 json.dumps(
                     {
                         **(
-                            {"prompt": (body.get("prompt", "")[:300] + "...(truncated)") if isinstance(body.get("prompt"), str) and len(body.get("prompt")) > 300 else body.get("prompt")}
+                            {
+                                "prompt": (
+                                    (body.get("prompt", "")[:300] + "...(truncated)")
+                                    if isinstance(body.get("prompt"), str) and len(body.get("prompt", "")) > 300
+                                    else body.get("prompt")
+                                )
+                            }
                         ),
                         **{k: v for k, v in body.items() if k != "prompt" and k != "image"},
-                        "image": {"count": len(body.get("image") or [])} if isinstance(body.get("image"), list) else body.get("image"),
+                        "image": {"count": len(body.get("image") or [])}
+                        if isinstance(body.get("image"), list)
+                        else body.get("image"),
                     },
                     ensure_ascii=False,
                 ),
@@ -398,9 +408,10 @@ class ImageGenerationTask(BaseTask):
                 (resp_text[:2000] + "...(truncated)") if len(resp_text) > 2000 else resp_text,
             )
             r.raise_for_status()
-            data = r.json()
+            self._http_json = r.json()
 
-        # 常见返回结构：{ "data": [ { "url": "...", ... }, ... ], "id": "...", "status": "succeeded" }
+    async def _poll_and_get_result(self) -> ImageGenerationResult:
+        data = self._http_json or {}
         raw_items = data.get("data") or []
         images: list[ImageItem] = []
         for item in raw_items:
@@ -424,3 +435,40 @@ class ImageGenerationTask(BaseTask):
             status=str(data.get("status") or "succeeded"),
         )
 
+
+class ImageGenerationTask(BaseTask):
+    """按 provider 分派到 OpenAI / 火山实现；对外构造函数与原先一致。"""
+
+    def __init__(
+        self,
+        *,
+        provider_config: ProviderConfig,
+        input_: ImageGenerationInput,
+        timeout_s: float = 60.0,
+    ) -> None:
+        if provider_config.provider == "openai":
+            self._impl: AbstractImageGenerationTask = OpenAIImageGenerationTask(
+                provider_config=provider_config,
+                input_=input_,
+                timeout_s=timeout_s,
+            )
+        elif provider_config.provider == "volcengine":
+            self._impl = VolcengineImageGenerationTask(
+                provider_config=provider_config,
+                input_=input_,
+                timeout_s=timeout_s,
+            )
+        else:
+            raise ValueError(f"Unsupported provider: {provider_config.provider!r}")
+
+    async def run(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any] | None:  # type: ignore[override]
+        return await self._impl.run(*args, **kwargs)
+
+    async def status(self) -> dict[str, Any]:  # type: ignore[override]
+        return await self._impl.status()
+
+    async def is_done(self) -> bool:  # type: ignore[override]
+        return await self._impl.is_done()
+
+    async def get_result(self) -> ImageGenerationResult | None:  # type: ignore[override]
+        return await self._impl.get_result()
