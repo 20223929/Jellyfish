@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from langchain_core.runnables import Runnable
+from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,13 +18,13 @@ from app.core.task_manager import DeliveryMode, SqlAlchemyTaskStore, TaskManager
 from app.core.task_manager.types import TaskStatus
 from app.dependencies import get_db, get_llm
 from app.models.studio import Shot, ShotDetail
+from app.models.task_links import GenerationTaskLink
 from app.schemas.common import ApiResponse, success_response
 
 from .common import (
     ShotFramePromptRequest,
     TaskCreated,
     _CreateOnlyTask,
-    bind_task,
 )
 from .image_requests import ShotFrameImageTaskRequest
 
@@ -39,7 +39,7 @@ router = APIRouter()
 )
 async def create_shot_frame_prompt_task(
     body: ShotFramePromptRequest,
-    llm: Runnable = Depends(get_llm),
+    llm: BaseChatModel = Depends(get_llm),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[TaskCreated]:
     frame_type = (body.frame_type or "").strip().lower()
@@ -91,12 +91,13 @@ async def create_shot_frame_prompt_task(
     }
 
     task_record = await tm.create(task=_CreateOnlyTask(), mode=DeliveryMode.async_polling, run_args=run_args)
-    await bind_task(
-        db,
-        task_id=task_record.id,
-        target_type="shot",
-        target_id=body.shot_id,
-        relation_type=relation_type,
+    db.add(
+        GenerationTaskLink(
+            task_id=task_record.id,
+            resource_type="prompt",
+            relation_type=relation_type,
+            relation_entity_id=body.shot_id,
+        )
     )
 
     async def _runner(task_id: str, args: dict) -> None:

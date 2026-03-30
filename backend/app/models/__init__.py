@@ -6,6 +6,8 @@ from app.models.base import TimestampMixin
 from app.models.llm import Model, ModelSettings, Provider
 from app.models.task import GenerationTask
 from app.models.task_links import GenerationTaskLink
+from app.models.types import FileUsageKind
+
 from app.models.studio import (
     Actor,
     ActorImage,
@@ -16,6 +18,7 @@ from app.models.studio import (
     Costume,
     CostumeImage,
     FileItem,
+    FileUsage,
     Project,
     Prop,
     PropImage,
@@ -63,6 +66,8 @@ __all__ = [
     "CostumeImage",
     "PromptTemplate",
     "FileItem",
+    "FileUsage",
+    "FileUsageKind",
     "TimelineClip",
     "Provider",
     "Model",

@@ -96,6 +96,7 @@ class Shot(Base,TimestampMixin):
     __table_args__ = (
         UniqueConstraint("chapter_id", "index", name="uq_shots_chapter_index"),
         Index("ix_shots_status", "status"),
+        Index("ix_shots_chapter_title", "chapter_id", "title"),
     )
 
 

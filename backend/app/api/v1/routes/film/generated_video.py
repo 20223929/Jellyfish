@@ -22,10 +22,12 @@ from app.dependencies import get_db
 from app.models.llm import Model, ModelCategoryKey, ModelSettings, Provider
 from app.models.task_links import GenerationTaskLink
 from app.models.studio import FileItem, Shot, ShotDetail, ShotFrameImage, ShotFrameType
+from app.models.types import FileUsageKind
+from app.services.studio.file_usages import sync_usage_from_shot_context
 from app.schemas.common import ApiResponse, success_response
 from app.utils.files import create_file_from_url_or_b64
 
-from .common import TaskCreated, _CreateOnlyTask, bind_task
+from .common import TaskCreated, _CreateOnlyTask
 from .video_request import VideoGenerationTaskRequest
 
 router = APIRouter()
@@ -245,7 +247,7 @@ async def _persist_generated_video_to_shot(
         select(GenerationTaskLink)
         .where(
             GenerationTaskLink.task_id == task_id,
-            GenerationTaskLink.resource_type == "task_link",
+            GenerationTaskLink.resource_type == "video",
             GenerationTaskLink.relation_type == "video",
             GenerationTaskLink.relation_entity_id == shot_id,
         )
@@ -258,6 +260,14 @@ async def _persist_generated_video_to_shot(
     shot = await session.get(Shot, shot_id)
     if shot is not None:
         shot.generated_video_file_id = file_obj.id
+
+    await sync_usage_from_shot_context(
+        session,
+        file_id=file_obj.id,
+        shot_id=shot_id,
+        usage_kind=FileUsageKind.generated_video,
+        source_ref=f"shot:{shot_id}:generated_video",
+    )
 
     return file_obj
 
@@ -330,12 +340,13 @@ async def create_video_generation_task(
         mode=DeliveryMode.async_polling,
         run_args=run_args,
     )
-    await bind_task(
-        db,
-        task_id=task_record.id,
-        target_type="shot",
-        target_id=body.shot_id,
-        relation_type="video",
+    db.add(
+        GenerationTaskLink(
+            task_id=task_record.id,
+            resource_type="video",
+            relation_type="video",
+            relation_entity_id=body.shot_id,
+        )
     )
 
     # 确保任务记录已提交，避免后台 runner 新 session 查询不到任务行而无法更新状态。

@@ -114,6 +114,18 @@ class FileType(str, Enum):
     video = "video"
 
 
+class FileUsageKind(str, Enum):
+    """文件在项目业务链上的用途（file_usages.usage_kind）。"""
+
+    shot_frame = "shot_frame"
+    generated_video = "generated_video"
+    character_image = "character_image"
+    asset_image = "asset_image"
+    task_link = "task_link"
+    upload = "upload"
+    api = "api"
+
+
 class TimelineClipType(str, Enum):
     """时间线片段类型（视频/音频）。"""
 

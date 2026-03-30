@@ -2,9 +2,12 @@
 
 from app.schemas.studio.files import (
     FileCreate,
+    FileDetailRead,
     FileRead,
     FileTypeEnum,
     FileUpdate,
+    FileUsageRead,
+    FileUsageWrite,
 )
 from app.schemas.studio.prompts import (
     PromptCategoryOptionRead,

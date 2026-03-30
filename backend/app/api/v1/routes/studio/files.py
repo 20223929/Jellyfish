@@ -5,20 +5,21 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
-from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.core import storage
 from app.dependencies import get_db
-from app.models.studio import Chapter, FileItem, FileType
+from app.models.studio import FileItem, FileType
 from app.schemas.common import ApiResponse, PaginatedData, paginated_response, success_response
-from app.schemas.studio import FileRead, FileUpdate
+from app.schemas.studio import FileDetailRead, FileRead, FileUpdate, FileUsageRead, FileUsageWrite
+from app.services.studio.file_usages import list_files_by_scope_paginated, upsert_file_usage
 
 router = APIRouter()
 
@@ -37,7 +38,36 @@ async def list_files_api(
     is_desc: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
+    project_id: str | None = Query(None, description="按 file_usages 限定项目；提供后仅返回该项目下有关联记录的文件"),
+    chapter_title: str | None = Query(None, description="章节标题（精确匹配，与 project_id 联用）"),
+    shot_title: str | None = Query(None, description="镜头标题（精确匹配，与 project_id 联用）"),
 ) -> ApiResponse[PaginatedData[FileRead]]:
+    if chapter_title is not None or shot_title is not None:
+        if not project_id:
+            raise HTTPException(
+                status_code=400,
+                detail="project_id is required when chapter_title or shot_title is set",
+            )
+
+    if project_id is not None:
+        items, total = await list_files_by_scope_paginated(
+            db,
+            project_id=project_id,
+            chapter_title=chapter_title,
+            shot_title=shot_title,
+            q=q,
+            order=order,
+            is_desc=is_desc,
+            page=page,
+            page_size=page_size,
+        )
+        return paginated_response(
+            [FileRead.model_validate(x) for x in items],
+            page=page,
+            page_size=page_size,
+            total=total,
+        )
+
     stmt = select(FileItem)
     stmt = apply_keyword_filter(stmt, q=q, fields=[FileItem.name])
     stmt = apply_order(
@@ -57,21 +87,6 @@ async def list_files_api(
     )
 
 
-@router.get(
-    "/{file_id}",
-    response_model=ApiResponse[FileRead],
-    summary="获取文件详情（仅元信息）",
-)
-async def get_file_detail(
-    file_id: str,
-    db: AsyncSession = Depends(get_db),
-) -> ApiResponse[FileRead]:
-    obj = await db.get(FileItem, file_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="File not found")
-    return success_response(FileRead.model_validate(obj))
-
-
 @router.post(
     "/upload",
     response_model=ApiResponse[FileRead],
@@ -82,9 +97,12 @@ async def upload_file_api(
     file: UploadFile = File(..., description="要上传的二进制文件"),
     name: str | None = None,
     db: AsyncSession = Depends(get_db),
+    project_id: str | None = Form(None, description="可选：写入 file_usages 的项目 ID"),
+    chapter_id: str | None = Form(None),
+    shot_id: str | None = Form(None),
+    usage_kind: str | None = Form(None, description="与 project_id 同时提供时写入 file_usages"),
+    source_ref: str | None = Form(None),
 ) -> ApiResponse[FileRead]:
-
-    # FileItem 不再记录项目/章节归属，project_id/chapter_id 参数仅保留向后兼容（可用于调用方自建关联）。
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="上传文件缺少文件名")
@@ -107,7 +125,7 @@ async def upload_file_api(
 
     content = await file.read()
 
-    # 这里存“逻辑 key”，不再包含 project_id/chapter_id，归属由数据库记录区分。
+    # 这里存“逻辑 key”，不再包含 project_id/chapter_id，归属由 file_usages 区分。
     key = f"files/{file.filename}"
     info = await storage.upload_file(
         key=key,
@@ -132,15 +150,26 @@ async def upload_file_api(
         db.add(obj)
         await db.flush()
         await db.refresh(obj)
-        return success_response(FileRead.model_validate(obj), code=201)
+    else:
+        obj.type = file_type
+        obj.name = display_name
+        if not obj.thumbnail:
+            obj.thumbnail = info.url
+        await db.flush()
+        await db.refresh(obj)
 
-    obj.type = file_type
-    obj.name = display_name
-    if not obj.thumbnail:
-        obj.thumbnail = info.url
-    await db.flush()
-    await db.refresh(obj)
-    return success_response(FileRead.model_validate(obj))
+    if project_id and usage_kind:
+        await upsert_file_usage(
+            db,
+            file_id=obj.id,
+            project_id=project_id,
+            chapter_id=chapter_id,
+            shot_id=shot_id,
+            usage_kind=usage_kind,
+            source_ref=source_ref,
+        )
+
+    return success_response(FileRead.model_validate(obj), code=201)
 
 
 @router.get(
@@ -214,6 +243,25 @@ async def get_file_storage_info_api(
     )
 
 
+@router.get(
+    "/{file_id}",
+    response_model=ApiResponse[FileDetailRead],
+    summary="获取文件详情（元信息 + file_usages）",
+)
+async def get_file_detail(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[FileDetailRead]:
+    stmt = select(FileItem).options(selectinload(FileItem.usages)).where(FileItem.id == file_id)
+    res = await db.execute(stmt)
+    obj = res.scalars().first()
+    if obj is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    usages = [FileUsageRead.model_validate(u) for u in (obj.usages or [])]
+    base = FileRead.model_validate(obj)
+    return success_response(FileDetailRead(**base.model_dump(), usages=usages))
+
+
 @router.patch(
     "/{file_id}",
     response_model=ApiResponse[FileRead],
@@ -229,8 +277,20 @@ async def update_file_meta(
         raise HTTPException(status_code=404, detail="File not found")
 
     data = body.model_dump(exclude_unset=True)
+    usage_payload = data.pop("usage", None)
     for k, v in data.items():
         setattr(obj, k, v)
+    if usage_payload is not None:
+        u = FileUsageWrite.model_validate(usage_payload)
+        await upsert_file_usage(
+            db,
+            file_id=file_id,
+            project_id=u.project_id,
+            chapter_id=u.chapter_id,
+            shot_id=u.shot_id,
+            usage_kind=u.usage_kind,
+            source_ref=u.source_ref,
+        )
     await db.flush()
     await db.refresh(obj)
     return success_response(FileRead.model_validate(obj))

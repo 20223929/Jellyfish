@@ -5,12 +5,14 @@ from __future__ import annotations
 import base64
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import storage
 from app.models.studio import FileItem, FileType
+from app.models.types import FileUsageKind
 
 
 async def _infer_file_type_from_ext(ext: str) -> FileType:
@@ -21,6 +23,17 @@ async def _infer_file_type_from_ext(ext: str) -> FileType:
         return FileType.video
     # 默认按图片处理，调用方若有更精细需求可在外层再封装
     return FileType.image
+
+
+@dataclass(frozen=True)
+class FileUsageCreateParams:
+    """创建 FileItem 后写入 file_usages 的参数。"""
+
+    project_id: str
+    chapter_id: str | None = None
+    shot_id: str | None = None
+    usage_kind: FileUsageKind | str = FileUsageKind.api
+    source_ref: str | None = None
 
 
 async def _infer_file_type_from_content_type(content_type: str | None) -> FileType:
@@ -43,6 +56,7 @@ async def create_file_from_url_or_b64(
     prefix: str = "files",
     url_request_headers: dict[str, str] | None = None,
     httpx_timeout: float | None = None,
+    usage: FileUsageCreateParams | None = None,
 ) -> FileItem:
     """从远端 URL 或 base64 内容创建 FileItem。
 
@@ -115,5 +129,19 @@ async def create_file_from_url_or_b64(
     session.add(file_obj)
     await session.flush()
     await session.refresh(file_obj)
+
+    if usage is not None:
+        from app.services.studio.file_usages import upsert_file_usage
+
+        await upsert_file_usage(
+            session,
+            file_id=file_obj.id,
+            project_id=usage.project_id,
+            chapter_id=usage.chapter_id,
+            shot_id=usage.shot_id,
+            usage_kind=usage.usage_kind,
+            source_ref=usage.source_ref,
+        )
+
     return file_obj
 

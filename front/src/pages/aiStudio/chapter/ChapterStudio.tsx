@@ -2017,7 +2017,7 @@ function Inspector(props: {
       try {
         const links = await listTaskLinksNormalized({
           resourceType: 'video',
-          relationType: 'shot',
+          relationType: 'video',
           relationEntityId: selectedShot.id,
           order: 'updated_at',
           isDesc: true,

@@ -117,6 +117,7 @@ class Chapter(Base, TimestampMixin):
         UniqueConstraint("project_id", "index", name="uq_chapters_project_index"),
         Index("ix_chapters_updated_at", "updated_at"),
         Index("ix_chapters_status", "status"),
+        Index("ix_chapters_project_title", "project_id", "title"),
     )
 
 

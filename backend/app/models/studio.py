@@ -23,6 +23,7 @@ from app.models.studio_import_drafts import (
     ImportSceneDraft,
 )
 from app.models.studio_prompts_files_timeline import FileItem, PromptTemplate, TimelineClip
+from app.models.studio_file_usages import FileUsage
 from app.models.studio_projects import (
     Chapter,
     Project,
@@ -47,6 +48,7 @@ from app.models.types import (
     ChapterStatus,
     DialogueLineMode,
     FileType,
+    FileUsageKind,
     ImportDraftType,
     ProjectStyle,
     ProjectVisualStyle,
@@ -70,6 +72,7 @@ __all__ = [
     "AssetViewAngle",
     "ShotFrameType",
     "FileType",
+    "FileUsageKind",
     "TimelineClipType",
     "DialogueLineMode",
     "VFXType",
@@ -105,6 +108,7 @@ __all__ = [
     "ImportDraftShotOccurrence",
     "PromptTemplate",
     "FileItem",
+    "FileUsage",
     "TimelineClip",
 ]
 

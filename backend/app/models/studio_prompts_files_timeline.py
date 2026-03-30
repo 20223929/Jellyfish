@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import Boolean, JSON, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
 from app.models.base import TimestampMixin
@@ -46,6 +46,13 @@ class FileItem(Base, TimestampMixin):
         String(1024),
         nullable=False,
         comment="对象存储中的 key（如 files/xxx.png）",
+    )
+
+    usages: Mapped[list["FileUsage"]] = relationship(
+        "FileUsage",
+        back_populates="file",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     __table_args__ = (

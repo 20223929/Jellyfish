@@ -42,6 +42,16 @@ from app.models.studio import (
     ShotFrameImage,
 )
 from app.models.task_links import GenerationTaskLink
+from app.models.types import FileUsageKind
+from app.services.studio.file_usages import (
+    first_project_id_for_actor,
+    first_project_id_for_costume,
+    first_project_id_for_prop,
+    first_project_id_for_scene,
+    sync_usage_from_character,
+    sync_usage_from_shot_context,
+    upsert_file_usage,
+)
 from app.schemas.common import ApiResponse, success_response
 from app.api.v1.routes.film.common import TaskCreated, _CreateOnlyTask
 from app.services.studio.image_tasks import (
@@ -827,22 +837,73 @@ async def _create_image_task_and_link(
             image_row = await session.get(ActorImage, int(relation_entity_id))
             if image_row is not None:
                 image_row.file_id = file_id
+                pid = await first_project_id_for_actor(session, image_row.actor_id)
+                if pid:
+                    await upsert_file_usage(
+                        session,
+                        file_id=file_id,
+                        project_id=pid,
+                        chapter_id=None,
+                        shot_id=None,
+                        usage_kind=FileUsageKind.asset_image,
+                        source_ref=f"actor_image:{image_row.id}",
+                    )
         elif relation_type == "scene_image":
             image_row = await session.get(SceneImage, int(relation_entity_id))
             if image_row is not None:
                 image_row.file_id = file_id
+                pid = await first_project_id_for_scene(session, image_row.scene_id)
+                if pid:
+                    await upsert_file_usage(
+                        session,
+                        file_id=file_id,
+                        project_id=pid,
+                        chapter_id=None,
+                        shot_id=None,
+                        usage_kind=FileUsageKind.asset_image,
+                        source_ref=f"scene_image:{image_row.id}",
+                    )
         elif relation_type == "prop_image":
             image_row = await session.get(PropImage, int(relation_entity_id))
             if image_row is not None:
                 image_row.file_id = file_id
+                pid = await first_project_id_for_prop(session, image_row.prop_id)
+                if pid:
+                    await upsert_file_usage(
+                        session,
+                        file_id=file_id,
+                        project_id=pid,
+                        chapter_id=None,
+                        shot_id=None,
+                        usage_kind=FileUsageKind.asset_image,
+                        source_ref=f"prop_image:{image_row.id}",
+                    )
         elif relation_type == "costume_image":
             image_row = await session.get(CostumeImage, int(relation_entity_id))
             if image_row is not None:
                 image_row.file_id = file_id
+                pid = await first_project_id_for_costume(session, image_row.costume_id)
+                if pid:
+                    await upsert_file_usage(
+                        session,
+                        file_id=file_id,
+                        project_id=pid,
+                        chapter_id=None,
+                        shot_id=None,
+                        usage_kind=FileUsageKind.asset_image,
+                        source_ref=f"costume_image:{image_row.id}",
+                    )
         elif relation_type == "character_image":
             image_row = await session.get(CharacterImage, int(relation_entity_id))
             if image_row is not None:
                 image_row.file_id = file_id
+                await sync_usage_from_character(
+                    session,
+                    file_id=file_id,
+                    character_id=image_row.character_id,
+                    usage_kind=FileUsageKind.character_image,
+                    source_ref=f"character_image:{image_row.id}",
+                )
         elif relation_type == "character":
             # 角色生成（任务版）：落库为 CharacterImage（优先填充 front+low 槽位；没有则创建）
             character_id = relation_entity_id
@@ -883,11 +944,29 @@ async def _create_image_task_and_link(
                     .values(is_primary=False)
                 )
                 await session.execute(stmt_clear)
+            await session.flush()
+            if ci is not None:
+                await sync_usage_from_character(
+                    session,
+                    file_id=file_id,
+                    character_id=character_id,
+                    usage_kind=FileUsageKind.character_image,
+                    source_ref=f"character_image:{ci.id}",
+                )
         elif relation_type == "shot_frame_image":
             image_row = await session.get(ShotFrameImage, int(relation_entity_id))
             if image_row is not None:
                 # 无条件覆盖：如果该 ShotFrameImage 是占位记录，也需要在生成完成后写入新图片。
                 image_row.file_id = file_id
+                detail = await session.get(ShotDetail, image_row.shot_detail_id)
+                if detail is not None:
+                    await sync_usage_from_shot_context(
+                        session,
+                        file_id=file_id,
+                        shot_id=detail.id,
+                        usage_kind=FileUsageKind.shot_frame,
+                        source_ref=f"shot_frame_image:{image_row.id}",
+                    )
 
     async def _runner(task_id: str, args: dict) -> None:
         async with async_session_maker() as session:
