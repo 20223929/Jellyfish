@@ -3,7 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ApiResponse_CharacterPortraitAnalysisResult_ } from '../models/ApiResponse_CharacterPortraitAnalysisResult_';
+import type { ApiResponse_CostumeInfoAnalysisResult_ } from '../models/ApiResponse_CostumeInfoAnalysisResult_';
 import type { ApiResponse_EntityMergeResult_ } from '../models/ApiResponse_EntityMergeResult_';
+import type { ApiResponse_PropInfoAnalysisResult_ } from '../models/ApiResponse_PropInfoAnalysisResult_';
+import type { ApiResponse_SceneInfoAnalysisResult_ } from '../models/ApiResponse_SceneInfoAnalysisResult_';
 import type { ApiResponse_ScriptConsistencyCheckResult_ } from '../models/ApiResponse_ScriptConsistencyCheckResult_';
 import type { ApiResponse_ScriptDivisionResult_ } from '../models/ApiResponse_ScriptDivisionResult_';
 import type { ApiResponse_ScriptOptimizationResult_ } from '../models/ApiResponse_ScriptOptimizationResult_';
@@ -12,8 +15,11 @@ import type { ApiResponse_ShotElementExtractionResult_ } from '../models/ApiResp
 import type { ApiResponse_StudioScriptExtractionDraft_ } from '../models/ApiResponse_StudioScriptExtractionDraft_';
 import type { ApiResponse_VariantAnalysisResult_ } from '../models/ApiResponse_VariantAnalysisResult_';
 import type { CharacterPortraitAnalysisRequest } from '../models/CharacterPortraitAnalysisRequest';
+import type { CostumeInfoAnalysisRequest } from '../models/CostumeInfoAnalysisRequest';
 import type { EntityMergerRequest } from '../models/EntityMergerRequest';
 import type { FullProcessRequest } from '../models/FullProcessRequest';
+import type { PropInfoAnalysisRequest } from '../models/PropInfoAnalysisRequest';
+import type { SceneInfoAnalysisRequest } from '../models/SceneInfoAnalysisRequest';
 import type { ScriptConsistencyCheckRequest } from '../models/ScriptConsistencyCheckRequest';
 import type { ScriptDividerRequest } from '../models/ScriptDividerRequest';
 import type { ScriptExtractRequest } from '../models/ScriptExtractRequest';
@@ -145,6 +151,69 @@ export class ScriptProcessingService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/script-processing/analyze-character-portrait',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 分析道具信息缺失项
+     * 根据原文道具上下文与道具描述，判断缺少哪些关键信息，并给出优化后的可生成道具描述。
+     * @returns ApiResponse_PropInfoAnalysisResult_ Successful Response
+     * @throws ApiError
+     */
+    public static analyzePropInfoApiV1ScriptProcessingAnalyzePropInfoPost({
+        requestBody,
+    }: {
+        requestBody: PropInfoAnalysisRequest,
+    }): CancelablePromise<ApiResponse_PropInfoAnalysisResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/analyze-prop-info',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 分析场景信息缺失项
+     * 根据原文场景上下文与场景描述，判断缺少哪些关键信息，并给出优化后的可生成场景描述。
+     * @returns ApiResponse_SceneInfoAnalysisResult_ Successful Response
+     * @throws ApiError
+     */
+    public static analyzeSceneInfoApiV1ScriptProcessingAnalyzeSceneInfoPost({
+        requestBody,
+    }: {
+        requestBody: SceneInfoAnalysisRequest,
+    }): CancelablePromise<ApiResponse_SceneInfoAnalysisResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/analyze-scene-info',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 分析服装信息缺失项
+     * 根据原文服装上下文与服装描述，判断缺少哪些关键信息，并给出优化后的可生成服装描述。
+     * @returns ApiResponse_CostumeInfoAnalysisResult_ Successful Response
+     * @throws ApiError
+     */
+    public static analyzeCostumeInfoApiV1ScriptProcessingAnalyzeCostumeInfoPost({
+        requestBody,
+    }: {
+        requestBody: CostumeInfoAnalysisRequest,
+    }): CancelablePromise<ApiResponse_CostumeInfoAnalysisResult_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/script-processing/analyze-costume-info',
             body: requestBody,
             mediaType: 'application/json',
             errors: {

@@ -12,12 +12,15 @@ from pydantic import BaseModel, Field
 
 from app.chains.agents import (
     CharacterPortraitAnalysisAgent,
+    CostumeInfoAnalysisAgent,
     ScriptDividerAgent,
     ElementExtractorAgent,
     EntityMergerAgent,
     VariantAnalyzerAgent,
     ConsistencyCheckerAgent,
     OutputCompilerAgent,
+    PropInfoAnalysisAgent,
+    SceneInfoAnalysisAgent,
     ScriptOptimizerAgent,
     ScriptSimplifierAgent,
     ShotElementExtractorAgent,
@@ -36,6 +39,9 @@ from app.chains.agents.script_processing_agents import (
 from app.dependencies import get_llm
 from app.schemas.common import ApiResponse, success_response
 from app.schemas.skills.character_portrait import CharacterPortraitAnalysisResult
+from app.schemas.skills.costume_info_analysis import CostumeInfoAnalysisResult
+from app.schemas.skills.prop_info_analysis import PropInfoAnalysisResult
+from app.schemas.skills.scene_info_analysis import SceneInfoAnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +373,120 @@ async def analyze_character_portrait(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to analyze character portrait: {str(e)}",
+        )
+
+
+# ============================================================================
+# 5c. PropInfoAnalysisAgent - 道具信息缺失分析
+# ============================================================================
+class PropInfoAnalysisRequest(BaseModel):
+    """道具信息缺失分析请求。"""
+
+    prop_context: str | None = Field(
+        None,
+        description="原文道具上下文（可为空；用于提供额外背景，帮助判断缺失信息）",
+    )
+    prop_description: str = Field(..., description="原文道具描述", min_length=1)
+
+
+@router.post(
+    "/analyze-prop-info",
+    response_model=ApiResponse[PropInfoAnalysisResult],
+    summary="分析道具信息缺失项",
+    description="根据原文道具上下文与道具描述，判断缺少哪些关键信息，并给出优化后的可生成道具描述。",
+)
+async def analyze_prop_info(
+    request: PropInfoAnalysisRequest,
+    llm: BaseChatModel = Depends(get_llm),
+) -> ApiResponse[PropInfoAnalysisResult]:
+    try:
+        agent = PropInfoAnalysisAgent(llm)
+        result = agent.analyze_prop_description(
+            prop_context=request.prop_context,
+            prop_description=request.prop_description,
+        )
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Prop info analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze prop info: {str(e)}",
+        )
+
+
+# ============================================================================
+# 5d. SceneInfoAnalysisAgent - 场景信息缺失分析
+# ============================================================================
+class SceneInfoAnalysisRequest(BaseModel):
+    """场景信息缺失分析请求。"""
+
+    scene_context: str | None = Field(
+        None,
+        description="原文场景上下文（可为空；用于提供额外背景，帮助判断缺失信息）",
+    )
+    scene_description: str = Field(..., description="原文场景描述", min_length=1)
+
+
+@router.post(
+    "/analyze-scene-info",
+    response_model=ApiResponse[SceneInfoAnalysisResult],
+    summary="分析场景信息缺失项",
+    description="根据原文场景上下文与场景描述，判断缺少哪些关键信息，并给出优化后的可生成场景描述。",
+)
+async def analyze_scene_info(
+    request: SceneInfoAnalysisRequest,
+    llm: BaseChatModel = Depends(get_llm),
+) -> ApiResponse[SceneInfoAnalysisResult]:
+    try:
+        agent = SceneInfoAnalysisAgent(llm)
+        result = agent.analyze_scene_description(
+            scene_context=request.scene_context,
+            scene_description=request.scene_description,
+        )
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Scene info analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze scene info: {str(e)}",
+        )
+
+
+# ============================================================================
+# 5e. CostumeInfoAnalysisAgent - 服装信息缺失分析
+# ============================================================================
+class CostumeInfoAnalysisRequest(BaseModel):
+    """服装信息缺失分析请求。"""
+
+    costume_context: str | None = Field(
+        None,
+        description="原文服装上下文（可为空；用于提供额外背景，帮助判断缺失信息）",
+    )
+    costume_description: str = Field(..., description="原文服装描述", min_length=1)
+
+
+@router.post(
+    "/analyze-costume-info",
+    response_model=ApiResponse[CostumeInfoAnalysisResult],
+    summary="分析服装信息缺失项",
+    description="根据原文服装上下文与服装描述，判断缺少哪些关键信息，并给出优化后的可生成服装描述。",
+)
+async def analyze_costume_info(
+    request: CostumeInfoAnalysisRequest,
+    llm: BaseChatModel = Depends(get_llm),
+) -> ApiResponse[CostumeInfoAnalysisResult]:
+    try:
+        agent = CostumeInfoAnalysisAgent(llm)
+        result = agent.analyze_costume_description(
+            costume_context=request.costume_context,
+            costume_description=request.costume_description,
+        )
+        return success_response(data=result)
+    except Exception as e:
+        logger.error(f"Costume info analysis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze costume info: {str(e)}",
         )
 
 

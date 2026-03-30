@@ -68,6 +68,9 @@ from app.schemas.skills.script_processing import (
     VariantSuggestion,
 )
 from app.schemas.skills.character_portrait import CharacterPortraitAnalysisResult
+from app.schemas.skills.prop_info_analysis import PropInfoAnalysisResult
+from app.schemas.skills.scene_info_analysis import SceneInfoAnalysisResult
+from app.schemas.skills.costume_info_analysis import CostumeInfoAnalysisResult
 from app.schemas.skills.shot_frame_prompt import ShotFramePromptInput, ShotFramePromptResult
 
 __all__ = [
@@ -141,5 +144,8 @@ __all__ = [
     "TableData",
     "OutputCompileResult",
     "CharacterPortraitAnalysisResult",
+    "PropInfoAnalysisResult",
+    "SceneInfoAnalysisResult",
+    "CostumeInfoAnalysisResult",
 ]
 

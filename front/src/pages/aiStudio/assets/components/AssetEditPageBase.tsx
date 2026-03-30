@@ -283,36 +283,66 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
     }
   }
 
-  const handleSmartDetectActorPortraitMissing = async () => {
-    // 仅对演员描述做缺失信息检测
-    if (relationType !== 'actor_image') return
+  const handleSmartDetectMissing = async () => {
     if (!assetId) return
 
     const description = (formDesc || '').trim()
     if (!description) {
-      message.warning('请先输入演员描述再进行智能检测')
+      if (relationType === 'actor_image') message.warning('请先输入演员描述再进行智能检测')
+      else if (relationType === 'scene_image') message.warning('请先输入场景描述再进行智能检测')
+      else if (relationType === 'prop_image') message.warning('请先输入道具描述再进行智能检测')
+      else if (relationType === 'costume_image') message.warning('请先输入服装描述再进行智能检测')
       return
     }
 
     setSmartDetectLoading(true)
     try {
-      const character_context = asset?.name ? `角色名：${formName}\n演员标签：${formTags}` : `演员标签：${formTags}`
+      let res: any = null
 
-      const res = await ScriptProcessingService.analyzeCharacterPortraitApiV1ScriptProcessingAnalyzeCharacterPortraitPost({
-        requestBody: {
-          character_description: description,
-          character_context: (character_context || '').trim() || null,
-        },
-      })
+      if (relationType === 'actor_image') {
+        const character_context = asset?.name ? `角色名：${formName}\n演员标签：${formTags}` : `演员标签：${formTags}`
+        res = await ScriptProcessingService.analyzeCharacterPortraitApiV1ScriptProcessingAnalyzeCharacterPortraitPost({
+          requestBody: {
+            character_description: description,
+            character_context: (character_context || '').trim() || null,
+          },
+        })
+      } else if (relationType === 'scene_image') {
+        const scene_context = asset?.name ? `场景名：${formName}\n标签：${formTags}` : `标签：${formTags}`
+        res = await ScriptProcessingService.analyzeSceneInfoApiV1ScriptProcessingAnalyzeSceneInfoPost({
+          requestBody: {
+            scene_description: description,
+            scene_context: (scene_context || '').trim() || null,
+          },
+        })
+      } else if (relationType === 'prop_image') {
+        const prop_context = asset?.name ? `道具名：${formName}\n标签：${formTags}` : `标签：${formTags}`
+        res = await ScriptProcessingService.analyzePropInfoApiV1ScriptProcessingAnalyzePropInfoPost({
+          requestBody: {
+            prop_description: description,
+            prop_context: (prop_context || '').trim() || null,
+          },
+        })
+      } else if (relationType === 'costume_image') {
+        const costume_context = asset?.name ? `服装名：${formName}\n标签：${formTags}` : `标签：${formTags}`
+        res = await ScriptProcessingService.analyzeCostumeInfoApiV1ScriptProcessingAnalyzeCostumeInfoPost({
+          requestBody: {
+            costume_description: description,
+            costume_context: (costume_context || '').trim() || null,
+          },
+        })
+      } else {
+        return
+      }
 
-      const data = res.data
+      const data = res?.data
       if (!data) {
-        message.error(res.message || '智能检测失败')
+        message.error(res?.message || '智能检测失败')
         return
       }
 
       const issues = Array.isArray(data.issues)
-        ? data.issues.filter((it): it is string => typeof it === 'string' && it.trim().length > 0)
+        ? data.issues.filter((it: unknown): it is string => typeof it === 'string' && it.trim().length > 0)
         : []
       const optimizedDesc = (data.optimized_description ?? '').trim()
 
@@ -528,11 +558,14 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
                 <div>
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <div className="text-gray-600 text-sm">描述</div>
-                      {relationType === 'actor_image' ? (
+                      {relationType === 'actor_image' ||
+                      relationType === 'scene_image' ||
+                      relationType === 'prop_image' ||
+                      relationType === 'costume_image' ? (
                         <Button
                           type="primary"
                           size="small"
-                          onClick={() => void handleSmartDetectActorPortraitMissing()}
+                          onClick={() => void handleSmartDetectMissing()}
                           loading={smartDetectLoading}
                           disabled={Boolean(loading)}
                         >
