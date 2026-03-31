@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.models.studio import (
@@ -215,4 +217,24 @@ class ShotFrameImageUpdate(BaseModel):
 class ShotFrameImageRead(ShotFrameImageBase):
     class Config:
         from_attributes = True
+
+
+ShotLinkedAssetType = Literal["character", "prop", "scene", "costume"]
+
+
+class ShotLinkedAssetItem(BaseModel):
+    """按分镜聚合返回的关联资产条目（角色/道具/场景/服装）。"""
+
+    type: ShotLinkedAssetType = Field(..., description="实体类型：character/prop/scene/costume")
+    id: str = Field(..., description="实体 ID（如 character_id/prop_id/scene_id/costume_id）")
+    image_id: int | None = Field(
+        None,
+        description="最佳缩略图对应的 image 行 ID（如 PropImage.id）；无图则为 null",
+    )
+    file_id: str | None = Field(
+        None,
+        description="最佳缩略图对应的文件 ID（files.id）；用于参考图输入；无图则为 null",
+    )
+    name: str = Field(..., description="实体名称")
+    thumbnail: str = Field("", description="缩略图下载地址（/api/v1/studio/files/{file_id}/download）")
 

@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ApiResponse_NoneType_ } from '../models/ApiResponse_NoneType_';
+import type { ApiResponse_PaginatedData_ShotLinkedAssetItem__ } from '../models/ApiResponse_PaginatedData_ShotLinkedAssetItem__';
 import type { ApiResponse_PaginatedData_ShotRead__ } from '../models/ApiResponse_PaginatedData_ShotRead__';
 import type { ApiResponse_ShotRead_ } from '../models/ApiResponse_ShotRead_';
 import type { ShotCreate } from '../models/ShotCreate';
@@ -134,6 +135,35 @@ export class StudioShotsService {
             url: '/api/v1/studio/shots/{shot_id}',
             path: {
                 'shot_id': shotId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 获取镜头关联的角色/道具/场景/服装（分页）
+     * @returns ApiResponse_PaginatedData_ShotLinkedAssetItem__ Successful Response
+     * @throws ApiError
+     */
+    public static listShotLinkedAssetsApiV1StudioShotsShotIdLinkedAssetsGet({
+        shotId,
+        page = 1,
+        pageSize = 10,
+    }: {
+        shotId: string,
+        page?: number,
+        pageSize?: number,
+    }): CancelablePromise<ApiResponse_PaginatedData_ShotLinkedAssetItem__> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/studio/shots/{shot_id}/linked-assets',
+            path: {
+                'shot_id': shotId,
+            },
+            query: {
+                'page': page,
+                'page_size': pageSize,
             },
             errors: {
                 422: `Validation Error`,

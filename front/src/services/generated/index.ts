@@ -34,6 +34,7 @@ export type { ApiResponse_PaginatedData_ProviderRead__ } from './models/ApiRespo
 export type { ApiResponse_PaginatedData_ShotDetailRead__ } from './models/ApiResponse_PaginatedData_ShotDetailRead__';
 export type { ApiResponse_PaginatedData_ShotDialogLineRead__ } from './models/ApiResponse_PaginatedData_ShotDialogLineRead__';
 export type { ApiResponse_PaginatedData_ShotFrameImageRead__ } from './models/ApiResponse_PaginatedData_ShotFrameImageRead__';
+export type { ApiResponse_PaginatedData_ShotLinkedAssetItem__ } from './models/ApiResponse_PaginatedData_ShotLinkedAssetItem__';
 export type { ApiResponse_PaginatedData_ShotRead__ } from './models/ApiResponse_PaginatedData_ShotRead__';
 export type { ApiResponse_PrepDraftShotRead_ } from './models/ApiResponse_PrepDraftShotRead_';
 export type { ApiResponse_ProjectActorLinkRead_ } from './models/ApiResponse_ProjectActorLinkRead_';
@@ -125,6 +126,7 @@ export type { PaginatedData_ProviderRead_ } from './models/PaginatedData_Provide
 export type { PaginatedData_ShotDetailRead_ } from './models/PaginatedData_ShotDetailRead_';
 export type { PaginatedData_ShotDialogLineRead_ } from './models/PaginatedData_ShotDialogLineRead_';
 export type { PaginatedData_ShotFrameImageRead_ } from './models/PaginatedData_ShotFrameImageRead_';
+export type { PaginatedData_ShotLinkedAssetItem_ } from './models/PaginatedData_ShotLinkedAssetItem_';
 export type { PaginatedData_ShotRead_ } from './models/PaginatedData_ShotRead_';
 export type { Pagination } from './models/Pagination';
 export type { PrepDraftShotRead } from './models/PrepDraftShotRead';
@@ -182,6 +184,7 @@ export type { ShotFrameImageTaskRequest } from './models/ShotFrameImageTaskReque
 export type { ShotFrameImageUpdate } from './models/ShotFrameImageUpdate';
 export type { ShotFramePromptRequest } from './models/ShotFramePromptRequest';
 export type { ShotFrameType } from './models/ShotFrameType';
+export type { ShotLinkedAssetItem } from './models/ShotLinkedAssetItem';
 export type { ShotPropInfo } from './models/ShotPropInfo';
 export type { ShotRead } from './models/ShotRead';
 export type { ShotSceneInfo } from './models/ShotSceneInfo';

@@ -91,6 +91,49 @@ async def resolve_thumbnails(
     return {parent_id: download_url(score[3]) for parent_id, score in best.items()}
 
 
+async def resolve_thumbnail_infos(
+    db: AsyncSession,
+    *,
+    image_model: type,
+    parent_field_name: str,
+    parent_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """解析每个 parent_id 的最佳缩略图信息（thumbnail + image_id）。
+
+    评分规则与 `resolve_thumbnails` 保持一致：
+    - 优先 view_angle=front
+    - 其次 created_at 新的优先
+    - 其次 image 行 id 大的优先
+    """
+
+    if not parent_ids:
+        return {}
+    parent_field = getattr(image_model, parent_field_name)
+    stmt = select(image_model).where(parent_field.in_(parent_ids), image_model.file_id.is_not(None))
+    rows = (await db.execute(stmt)).scalars().all()
+    best: dict[str, tuple[int, int, int, int, str]] = {}
+    for row in rows:
+        file_id = row.file_id
+        if not file_id:
+            continue
+        parent_id = getattr(row, parent_field_name)
+        created_ts = int(row.created_at.timestamp()) if row.created_at else -1
+        image_id = int(row.id)
+        score3 = (1 if row.view_angle == AssetViewAngle.front else 0, created_ts, image_id)
+        current = best.get(parent_id)
+        if current is None or score3 > current[:3]:
+            best[parent_id] = (*score3, image_id, file_id)
+
+    return {
+        parent_id: {
+            "image_id": info[3],
+            "file_id": info[4],
+            "thumbnail": download_url(info[4]),
+        }
+        for parent_id, info in best.items()
+    }
+
+
 def normalize_entity_type(entity_type: str) -> str:
     t = entity_type.strip().lower()
     if t not in {"actor", "character", "scene", "prop", "costume"}:

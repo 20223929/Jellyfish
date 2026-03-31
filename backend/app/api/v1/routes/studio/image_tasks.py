@@ -55,6 +55,7 @@ from app.services.studio.file_usages import (
     upsert_file_usage,
 )
 from app.schemas.common import ApiResponse, success_response
+from app.schemas.studio.shots import ShotLinkedAssetItem
 from app.api.v1.routes.film.common import TaskCreated, _CreateOnlyTask
 from app.services.studio.image_tasks import (
     asset_prompt_category as _asset_prompt_category,
@@ -114,13 +115,17 @@ class ShotFrameImageTaskRequest(BaseModel):
         description="可选模型 ID（models.id）；不传则使用 ModelSettings.default_image_model_id；Provider 由模型关联反查",
     )
     frame_type: ShotFrameType = Field(..., description="first | last | key")
-    prompt: str | None = Field(
-        None,
-        description="提示词（由前端传入）。创建任务接口必填；frame-render-prompt 接口可不传",
+    prompt: str = Field(
+        ...,
+        description="提示词（由前端传入，必填）。frame-render-prompt 与创建任务接口均使用该字段。",
+        min_length=1,
     )
-    images: list[str] = Field(
+    images: list[ShotLinkedAssetItem] = Field(
         default_factory=list,
-        description="参考图 file_id 列表（可多张，顺序有效）。创建任务接口会基于 file_id 从数据中解析为参考图",
+        description=(
+            "参考资产条目列表（可多张，顺序有效）。后端会使用 item.file_id 作为参考图；"
+            "无效条目会被跳过。"
+        ),
     )
 
 
@@ -130,6 +135,31 @@ class RenderedPromptResponse(BaseModel):
         default_factory=list,
         description="参考图 file_id 列表（自动选择；顺序有效）",
     )
+
+
+async def _resolve_reference_file_ids_and_names_from_linked_items(
+    db: AsyncSession,
+    *,
+    items: list[ShotLinkedAssetItem],
+) -> tuple[list[str], list[str]]:
+    """将关联资产条目解析为参考图 file_id 列表（顺序有效）。
+
+    规则：
+    - 直接使用 item.file_id（不再通过 type+image_id 查库解析）
+    - file_id 为空或无效则跳过
+    """
+
+    file_ids: list[str] = []
+    names: list[str] = []
+    for it in items or []:
+        name = (it.name or "").strip()
+        file_id = (it.file_id or "").strip()
+        if not file_id:
+            continue
+        file_ids.append(str(file_id))
+        names.append(name or (it.id or ""))
+
+    return file_ids, names
 
 
 async def _resolve_reference_image_refs_by_file_ids(
@@ -654,14 +684,10 @@ async def _build_shot_frame_prompt_and_refs(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ShotDetail not found")
 
     project = getattr(getattr(getattr(shot_detail, "shot", None), "chapter", None), "project", None)
-    visual_style = (
-        project.visual_style.value if getattr(project, "visual_style", None) is not None and hasattr(project.visual_style, "value")
-        else str(getattr(project, "visual_style", "") or "")
-    )
-    style = (
-        project.style.value if getattr(project, "style", None) is not None and hasattr(project.style, "value")
-        else str(getattr(project, "style", "") or "")
-    )
+    _vs = getattr(project, "visual_style", None)
+    visual_style = _vs.value if _vs is not None and hasattr(_vs, "value") else str(_vs or "")
+    _st = getattr(project, "style", None)
+    style = _st.value if _st is not None and hasattr(_st, "value") else str(_st or "")
 
     if frame_type == ShotFrameType.first:
         raw_prompt = (shot_detail.first_frame_prompt or "").strip()
@@ -1239,7 +1265,8 @@ async def create_shot_frame_image_generation_task(
     shot_detail = await db.get(ShotDetail, shot_id)
     if shot_detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ShotDetail not found")
-    ref_images = await _resolve_reference_image_refs_by_file_ids(db, file_ids=body.images)
+    file_ids, _names = await _resolve_reference_file_ids_and_names_from_linked_items(db, items=body.images)
+    ref_images = await _resolve_reference_image_refs_by_file_ids(db, file_ids=file_ids)
 
     # 通过 shot_id 与 frame_type 定位 ShotFrameImage，作为落库目标；若不存在则创建占位记录。
     shot_frame_image_stmt = (
@@ -1289,10 +1316,19 @@ async def render_shot_frame_prompt(
     body: ShotFrameImageTaskRequest,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[RenderedPromptResponse]:
-    prompt, images, _shot_detail = await _build_shot_frame_prompt_and_refs(
-        db,
-        shot_id=shot_id,
-        frame_type=body.frame_type,
-    )
-    return success_response(RenderedPromptResponse(prompt=prompt, images=images))
+    # 不再从 ShotDetail 自动构建提示词：直接使用请求体中的 prompt
+    prompt = (body.prompt or "").strip()
+    file_ids, names = await _resolve_reference_file_ids_and_names_from_linked_items(db, items=body.images)
+    # 若 prompt 为空，则不进行任何拼接，直接返回空 prompt
+    if not prompt:
+        return success_response(RenderedPromptResponse(prompt="", images=file_ids))
+
+    if names:
+        lines = ["## 图片内容说明"]
+        for i, n in enumerate(names, start=1):
+            lines.append(f"图{i}: {n}")
+        lines.append("## 生成内容")
+        header = "\n".join(lines).strip() + "\n"
+        prompt = header + prompt
+    return success_response(RenderedPromptResponse(prompt=prompt, images=file_ids))
 

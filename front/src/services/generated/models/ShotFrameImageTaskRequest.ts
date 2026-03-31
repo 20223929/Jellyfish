@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ShotFrameType } from './ShotFrameType';
+import type { ShotLinkedAssetItem } from './ShotLinkedAssetItem';
 /**
  * 镜头分镜帧图片生成请求体：只根据 `shot_id + frame_type` 定位 ShotFrameImage。
  *
@@ -18,12 +19,12 @@ export type ShotFrameImageTaskRequest = {
      */
     frame_type: ShotFrameType;
     /**
-     * 提示词（由前端传入）。创建任务接口必填；frame-render-prompt 接口可不传
+     * 提示词（由前端传入，必填）。frame-render-prompt 与创建任务接口均使用该字段。
      */
-    prompt?: (string | null);
+    prompt: string;
     /**
-     * 参考图 file_id 列表（可多张，顺序有效）。创建任务接口会基于 file_id 从数据中解析为参考图
+     * 参考资产条目列表（可多张，顺序有效）。后端会使用 item.file_id 作为参考图；无效条目会被跳过。
      */
-    images?: Array<string>;
+    images?: Array<ShotLinkedAssetItem>;
 };
 

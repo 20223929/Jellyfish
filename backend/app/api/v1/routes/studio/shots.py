@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.dependencies import get_db
-from app.services.studio import entity_spec, normalize_entity_type, resolve_thumbnails
+from app.services.studio.entities import (
+    entity_spec,
+    normalize_entity_type,
+    resolve_thumbnail_infos,
+    resolve_thumbnails,
+)
 from app.models.studio import (
     Chapter,
     Character,
@@ -26,6 +31,7 @@ from app.models.studio import (
     ProjectSceneLink,
     ShotDetail,
     ShotDialogLine,
+    ShotCharacterLink,
     ShotFrameImage,
 )
 from app.schemas.common import ApiResponse, PaginatedData, paginated_response, success_response
@@ -33,6 +39,7 @@ from app.schemas.studio.shots import (
     ProjectActorLinkRead,
     ProjectAssetLinkCreate,
     ProjectCostumeLinkRead,
+    ShotLinkedAssetItem,
     ShotCreate,
     ShotDetailCreate,
     ShotDetailRead,
@@ -219,6 +226,150 @@ async def delete_shot(
     await db.delete(obj)
     await db.flush()
     return success_response(None)
+
+
+@router.get(
+    "/{shot_id}/linked-assets",
+    response_model=ApiResponse[PaginatedData[ShotLinkedAssetItem]],
+    summary="获取镜头关联的角色/道具/场景/服装（分页）",
+)
+async def list_shot_linked_assets(
+    shot_id: str,
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+) -> ApiResponse[PaginatedData[ShotLinkedAssetItem]]:
+    await _ensure_shot(db, shot_id)
+
+    # 1) Collect linked entity ids (links-only as requested)
+    character_ids = (await db.execute(
+        select(ShotCharacterLink.character_id).where(ShotCharacterLink.shot_id == shot_id)
+    )).scalars().all()
+    prop_ids = (await db.execute(
+        select(ProjectPropLink.prop_id).where(ProjectPropLink.shot_id == shot_id)
+    )).scalars().all()
+    scene_ids = (await db.execute(
+        select(ProjectSceneLink.scene_id).where(ProjectSceneLink.shot_id == shot_id)
+    )).scalars().all()
+    costume_ids = (await db.execute(
+        select(ProjectCostumeLink.costume_id).where(ProjectCostumeLink.shot_id == shot_id)
+    )).scalars().all()
+
+    # de-dup & drop nulls
+    character_ids = [x for x in dict.fromkeys(character_ids) if x]
+    prop_ids = [x for x in dict.fromkeys(prop_ids) if x]
+    scene_ids = [x for x in dict.fromkeys(scene_ids) if x]
+    costume_ids = [x for x in dict.fromkeys(costume_ids) if x]
+
+    # 2) Load names
+    character_rows = []
+    if character_ids:
+        character_rows = (await db.execute(
+            select(Character.id, Character.name).where(Character.id.in_(character_ids))
+        )).all()
+    prop_rows = []
+    if prop_ids:
+        prop_rows = (await db.execute(
+            select(Prop.id, Prop.name).where(Prop.id.in_(prop_ids))
+        )).all()
+    scene_rows = []
+    if scene_ids:
+        scene_rows = (await db.execute(
+            select(Scene.id, Scene.name).where(Scene.id.in_(scene_ids))
+        )).all()
+    costume_rows = []
+    if costume_ids:
+        costume_rows = (await db.execute(
+            select(Costume.id, Costume.name).where(Costume.id.in_(costume_ids))
+        )).all()
+
+    character_name = {str(r[0]): str(r[1]) for r in character_rows}
+    prop_name = {str(r[0]): str(r[1]) for r in prop_rows}
+    scene_name = {str(r[0]): str(r[1]) for r in scene_rows}
+    costume_name = {str(r[0]): str(r[1]) for r in costume_rows}
+
+    # 3) Resolve thumbnail + image_id
+    character_thumb = await resolve_thumbnail_infos(
+        db,
+        image_model=entity_spec("character").image_model,
+        parent_field_name="character_id",
+        parent_ids=list(character_name.keys()),
+    )
+    prop_thumb = await resolve_thumbnail_infos(
+        db,
+        image_model=entity_spec("prop").image_model,
+        parent_field_name="prop_id",
+        parent_ids=list(prop_name.keys()),
+    )
+    scene_thumb = await resolve_thumbnail_infos(
+        db,
+        image_model=entity_spec("scene").image_model,
+        parent_field_name="scene_id",
+        parent_ids=list(scene_name.keys()),
+    )
+    costume_thumb = await resolve_thumbnail_infos(
+        db,
+        image_model=entity_spec("costume").image_model,
+        parent_field_name="costume_id",
+        parent_ids=list(costume_name.keys()),
+    )
+
+    # 4) Build items (stable order: character/prop/scene/costume, then name)
+    items: list[ShotLinkedAssetItem] = []
+    for cid, name in character_name.items():
+        info = character_thumb.get(cid) or {}
+        items.append(
+            ShotLinkedAssetItem(
+                type="character",
+                id=cid,
+                image_id=info.get("image_id"),
+                file_id=info.get("file_id"),
+                name=name,
+                thumbnail=str(info.get("thumbnail") or ""),
+            )
+        )
+    for pid, name in prop_name.items():
+        info = prop_thumb.get(pid) or {}
+        items.append(
+            ShotLinkedAssetItem(
+                type="prop",
+                id=pid,
+                image_id=info.get("image_id"),
+                file_id=info.get("file_id"),
+                name=name,
+                thumbnail=str(info.get("thumbnail") or ""),
+            )
+        )
+    for sid, name in scene_name.items():
+        info = scene_thumb.get(sid) or {}
+        items.append(
+            ShotLinkedAssetItem(
+                type="scene",
+                id=sid,
+                image_id=info.get("image_id"),
+                file_id=info.get("file_id"),
+                name=name,
+                thumbnail=str(info.get("thumbnail") or ""),
+            )
+        )
+    for coid, name in costume_name.items():
+        info = costume_thumb.get(coid) or {}
+        items.append(
+            ShotLinkedAssetItem(
+                type="costume",
+                id=coid,
+                image_id=info.get("image_id"),
+                file_id=info.get("file_id"),
+                name=name,
+                thumbnail=str(info.get("thumbnail") or ""),
+            )
+        )
+
+    items.sort(key=lambda x: (x.type, x.name, x.id))
+    total = len(items)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return paginated_response(items[start:end], page=page, page_size=page_size, total=total)
 
 
 # ---------- ShotDetail ----------
