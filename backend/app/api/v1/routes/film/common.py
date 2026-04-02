@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Tuple
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, Field

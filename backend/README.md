@@ -113,9 +113,25 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 | 命令 | 说明 |
 |------|------|
 | `uv sync` | 安装/同步依赖 |
+| `uv sync --group dev` | 同步依赖并包含开发组（pytest、pylint 等） |
 | `uv add <pkg>` | 添加依赖 |
 | `uv run uvicorn app.main:app --reload` | 开发运行 |
 | `uv run pytest` | 运行测试 |
+| `uv run pylint app` | 对 `app` 包运行 Pylint（需已 `uv sync --group dev`） |
+
+## 代码检查（Pylint）
+
+与常见开源 Python 项目一致，Pylint 选项集中在 [`pyproject.toml`](pyproject.toml) 的 `[tool.pylint.*]`（行宽、Python 版本、`jobs=1` 等；并对 SQLAlchemy / 文档串等噪声规则做了合理关闭）。
+
+```bash
+cd backend
+uv sync --group dev
+uv run pylint app
+```
+
+- **Pylint**：未使用导入、风格问题、部分可维护性告警等。  
+- **BasedPyright**：类型检查配置在同文件 `[tool.basedpyright]`，供 IDE 或本机已安装的 `basedpyright` CLI 使用；与 Pylint 互补（类型 vs 风格/模式）。
+- **CI**：变更 `backend/**` 的 PR（及启用 Merge queue 时的合并组）会运行仓库根目录下的 [`.github/workflows/backend-pylint.yml`](../.github/workflows/backend-pylint.yml)。若要将 Pylint 作为合并前置，请在 GitHub **分支保护 / Rules** 中把对应状态检查（一般为 **Backend Pylint / pylint**）设为必需，详见该 workflow 文件头注释。
 
 ## 测试
 

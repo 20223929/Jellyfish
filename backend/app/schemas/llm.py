@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.models.llm import AgentTypeKey, LogLevel, ModelCategoryKey, ProviderStatus
+from app.models.llm import LogLevel, ModelCategoryKey, ProviderStatus
 
 
 class ProviderBase(BaseModel):

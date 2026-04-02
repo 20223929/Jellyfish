@@ -111,6 +111,8 @@ uv sync
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+提交前可在 `backend` 目录执行 `uv sync --group dev` 与 `uv run pylint app` 做静态检查（配置与说明见 [backend/README.md](backend/README.md)）。
+
 ### 启动前端
 
 ```bash

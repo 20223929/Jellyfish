@@ -111,6 +111,8 @@ uv sync
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+Before opening a PR, you can run `uv sync --group dev` and `uv run pylint app` under `backend` for static analysis (see [backend/README.md](../backend/README.md)).
+
 ### Start frontend
 
 ```bash

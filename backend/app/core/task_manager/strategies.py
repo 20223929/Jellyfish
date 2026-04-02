@@ -78,7 +78,10 @@ class AsyncPollingDeliveryStrategy(DeliveryStrategy):
     ) -> None:
         super().__init__(store)
         self._worker_fn = worker_fn
-        self._background_runner = background_runner or (lambda coro: asyncio.create_task(coro))
+        def _spawn(coro: Awaitable[None]) -> None:
+            asyncio.create_task(coro)
+
+        self._background_runner = background_runner or _spawn
 
     async def start(self, task: TaskRecord) -> None:
         await self.store.set_status(task.id, TaskStatus.running)

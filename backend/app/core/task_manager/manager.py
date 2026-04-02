@@ -69,5 +69,3 @@ class TaskManager:
             raise ValueError(f"Task not found: {task_id}")
         strategy = self._strategy_for(task.mode)
         return await strategy.stream(task)
-    
-

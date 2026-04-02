@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException
 from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import select
@@ -16,7 +14,7 @@ from app.chains.agents import (
 from app.core.db import async_session_maker
 from app.core.task_manager import DeliveryMode, SqlAlchemyTaskStore, TaskManager
 from app.core.task_manager.types import TaskStatus
-from app.dependencies import get_db, get_llm, get_nothinking_llm
+from app.dependencies import get_db, get_nothinking_llm
 from app.models.studio import Shot, ShotDetail
 from app.models.studio import Chapter
 from app.models.task_links import GenerationTaskLink
@@ -27,8 +25,6 @@ from .common import (
     TaskCreated,
     _CreateOnlyTask,
 )
-from .image_requests import ShotFrameImageTaskRequest
-
 router = APIRouter()
 
 

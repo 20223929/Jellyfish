@@ -21,7 +21,6 @@ from app.chains.agents import (
     EntityMergerAgent,
     VariantAnalyzerAgent,
     ConsistencyCheckerAgent,
-    OutputCompilerAgent,
     PropInfoAnalysisAgent,
     SceneInfoAnalysisAgent,
     ScriptOptimizerAgent,
@@ -32,7 +31,6 @@ from app.chains.agents.script_processing_agents import (
     EntityMergeResult,
     VariantAnalysisResult,
     ScriptConsistencyCheckResult,
-    OutputCompileResult,
     ScriptOptimizationResult,
     ScriptSimplificationResult,
     StudioScriptExtractionDraft,
@@ -156,7 +154,7 @@ async def divide_script(
 class EntityMergerRequest(BaseModel):
     """实体合并请求。"""
     all_shot_extractions: list[dict[str, Any]] = Field(
-        ..., 
+        ...,
         description="所有镜头提取结果（ShotElementExtractionResult 的序列化形式）"
     )
     historical_library: dict[str, Any] | None = Field(
@@ -654,7 +652,7 @@ async def full_process(
         )
         logger.info("Full process completed successfully")
         return success_response(data=final_result)
-    
+
     except Exception as e:
         logger.error(f"Full process failed: {e}")
         raise HTTPException(
