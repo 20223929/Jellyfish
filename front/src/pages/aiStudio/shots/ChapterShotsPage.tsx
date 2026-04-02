@@ -23,11 +23,12 @@ import {
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons'
 import type { ShotRead, ShotStatus } from '../../../services/generated'
 import { ScriptProcessingService, StudioChaptersService, StudioShotsService } from '../../../services/generated'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
-import { getChapterShotEditPath } from '../project/ProjectWorkbench/routes'
+import { getChapterShotEditPath, getChapterStudioPath } from '../project/ProjectWorkbench/routes'
 
 const { Header, Content } = Layout
 
@@ -383,6 +384,16 @@ export function ChapterShotsPage() {
             {loadingChapter ? '加载中…' : '分镜列表'}
           </Typography.Text>
         </div>
+
+        {shots.length > 0 ? (
+          <Button
+            type="primary"
+            icon={<VideoCameraOutlined />}
+            onClick={() => navigate(getChapterStudioPath(projectId, chapterId))}
+          >
+            进入拍摄
+          </Button>
+        ) : null}
       </Header>
 
       <Content
