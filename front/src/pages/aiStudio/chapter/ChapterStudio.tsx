@@ -60,7 +60,6 @@ import {
 import { useLocation, useParams, Link } from 'react-router-dom'
 import {
   FilmService,
-  ScriptProcessingService,
   StudioChaptersService,
   StudioEntitiesService,
   StudioFilesService,
@@ -99,10 +98,16 @@ import type {
 import { listTaskLinksNormalized } from '../../../services/filmTaskLinks'
 import { buildFileDownloadUrl, resolveAssetUrl } from '../assets/utils'
 import type { Chapter } from '../../../mocks/data'
+import { executeTaskCancel } from '../components/taskActionHelpers'
+import { useRelationTaskNotification } from '../components/taskNotificationHelpers'
+import { TASK_COPY } from '../components/taskCopy'
 import { ChapterStudioBatchToolbar } from './components/ChapterStudioBatchToolbar'
 import { ChapterStudioMaintenancePanel } from './components/ChapterStudioMaintenancePanel'
 import { ChapterStudioReadinessDiagnosisPanel } from './components/ChapterStudioReadinessDiagnosisPanel'
 import { ChapterStudioVideoReadinessPanel } from './components/ChapterStudioVideoReadinessPanel'
+import { useTaskPageContext } from '../components/taskPageContext'
+import type { RelationTaskState } from '../project/ProjectWorkbench/chapterDivisionTasks'
+import { toRelationTaskStateFromStatusRead } from '../project/ProjectWorkbench/chapterDivisionTasks'
 import './chapterStudio.separation.css'
 
 const { Sider, Content } = Layout
@@ -170,6 +175,19 @@ function clamp(n: number, min: number, max: number) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function applyTaskCancelState(
+  currentTask: RelationTaskState | null,
+  data?: { task_id?: string | null; status?: string | null; cancel_requested?: boolean | null } | null,
+): RelationTaskState | null {
+  if (!currentTask) return null
+  return {
+    ...currentTask,
+    taskId: data?.task_id || currentTask.taskId,
+    status: (data?.status ?? currentTask.status) as RelationTaskState['status'],
+    cancelRequested: data?.cancel_requested ?? true,
+  }
 }
 
 function reorder<T>(list: T[], startIndex: number, endIndex: number) {
@@ -325,7 +343,6 @@ const ChapterStudio: React.FC = () => {
   const [prefs, setPrefs] = useLocalStoragePrefs()
   const [generating, setGenerating] = useState(false)
   const [batchSkipExtractionUpdating, setBatchSkipExtractionUpdating] = useState(false)
-  const [batchExtractingCandidates, setBatchExtractingCandidates] = useState(false)
   const [batchVideoReadinessOpen, setBatchVideoReadinessOpen] = useState(false)
   const [batchVideoReadinessLoading, setBatchVideoReadinessLoading] = useState(false)
   const [batchVideoReadinessItems, setBatchVideoReadinessItems] = useState<
@@ -672,6 +689,16 @@ const ChapterStudio: React.FC = () => {
   }, [selectedShotId, selectedShotIds])
 
   const selectedShot = useMemo(() => shots.find((s) => s.id === selectedShotId) ?? null, [shots, selectedShotId])
+  useTaskPageContext(
+    selectedShotId
+      ? [
+          {
+            relationType: 'shot',
+            relationEntityId: selectedShotId,
+          },
+        ]
+      : [],
+  )
   const selectedShots = useMemo(
     () => shots.filter((shot) => selectedShotIds.includes(shot.id)),
     [selectedShotIds, shots],
@@ -837,56 +864,6 @@ const ChapterStudio: React.FC = () => {
     },
     [loadShotCandidateItems, loadShotDialogueCandidateItems, patchShotInList, selectedShotId, selectedShots],
   )
-
-  const batchRefreshCandidates = useCallback(async () => {
-    if (!projectId || !chapterId) return
-    const targetShots = selectedShots.filter((shot) => !shot.skip_extraction)
-    if (targetShots.length === 0) {
-      message.info('当前选中的分镜都已标记为无需提取，无需刷新候选；如需调整，请前往分镜编辑页处理')
-      return
-    }
-    setBatchExtractingCandidates(true)
-    try {
-      const scriptDivision = {
-        total_shots: targetShots.length,
-        shots: targetShots
-          .slice()
-          .sort((a, b) => a.index - b.index)
-          .map((shot) => ({
-            index: shot.index,
-            start_line: 1,
-            end_line: 1,
-            script_excerpt: shot.script_excerpt ?? '',
-            shot_name: shot.title ?? '',
-          })),
-      }
-      const res = await ScriptProcessingService.extractScriptApiV1ScriptProcessingExtractPost({
-        requestBody: {
-          project_id: projectId,
-          chapter_id: chapterId,
-          script_division: scriptDivision as any,
-          consistency: undefined,
-          refresh_cache: true,
-        } as any,
-      })
-      if (!res.data) {
-        message.error(res.message || '刷新候选失败')
-        return
-      }
-      await loadShots()
-      if (selectedShotId && targetShots.some((shot) => shot.id === selectedShotId)) {
-        await Promise.all([
-          loadShotCandidateItems(selectedShotId),
-          loadShotDialogueCandidateItems(selectedShotId),
-        ])
-      }
-      message.success(`已刷新 ${targetShots.length} 条分镜候选，请前往分镜编辑页继续确认`)
-    } catch {
-      message.error('刷新候选失败')
-    } finally {
-      setBatchExtractingCandidates(false)
-    }
-  }, [chapterId, loadShotCandidateItems, loadShotDialogueCandidateItems, loadShots, projectId, selectedShotId, selectedShots])
 
   const fetchBatchVideoReadiness = useCallback(async () => {
     if (selectedShots.length === 0) {
@@ -1440,12 +1417,13 @@ const ChapterStudio: React.FC = () => {
 
   const statusTag = (status: ShotStatus | undefined) => {
     const s = status ?? 'pending'
-    const map = { pending: 'default', ready: 'success' } as const
-    const text = { pending: '待确认', ready: '已就绪' } as const
+    const map = { pending: 'default', generating: 'processing', ready: 'success' } as const
+    const text = { pending: '待确认', generating: '生成中', ready: '已就绪' } as const
     return <Tag color={map[s]}>{text[s]}</Tag>
   }
 
   const statusDotClass = (status: ShotStatus | undefined) => {
+    if (status === 'generating') return 'cs-generating'
     if (status === 'ready') return 'cs-ready'
     return 'cs-pending'
   }
@@ -1977,11 +1955,9 @@ const ChapterStudio: React.FC = () => {
           {multiToolbarVisible && (
             <ChapterStudioBatchToolbar
               selectedCount={selectedShotIds.length}
-              batchExtractingCandidates={batchExtractingCandidates}
               batchVideoReadinessLoading={batchVideoReadinessLoading}
               generating={generating}
               maintenanceMenuItems={batchMaintenanceMenuItems}
-              onBatchRefreshCandidates={() => void batchRefreshCandidates()}
               onBatchInspectVideoReadiness={() => void batchInspectVideoReadiness()}
               onBatchGenerate={() => batchMenuItems.find((item) => item.key === 'generate')?.onClick?.()}
             />
@@ -2809,6 +2785,12 @@ function Inspector(props: {
   const [videoTaskPolling, setVideoTaskPolling] = useState(false)
   const [videoTaskStatus, setVideoTaskStatus] = useState<string | null>(null)
   const [videoTaskId, setVideoTaskId] = useState<string | null>(null)
+  const [videoTask, setVideoTask] = useState<RelationTaskState | null>(null)
+  const [videoSettledTask, setVideoSettledTask] = useState<RelationTaskState | null>(null)
+  const [promptTask, setPromptTask] = useState<RelationTaskState | null>(null)
+  const [promptSettledTask, setPromptSettledTask] = useState<RelationTaskState | null>(null)
+  const [frameImageTask, setFrameImageTask] = useState<RelationTaskState | null>(null)
+  const [frameImageSettledTask, setFrameImageSettledTask] = useState<RelationTaskState | null>(null)
   const [generatedVideos, setGeneratedVideos] = useState<Array<{ linkId: number; fileId: string; url: string }>>([])
   const [videoReadiness, setVideoReadiness] = useState<ShotVideoReadinessRead | null>(null)
   const [videoReadinessLoading, setVideoReadinessLoading] = useState(false)
@@ -2816,6 +2798,92 @@ function Inspector(props: {
     first: { loading: false, taskStatus: null, taskId: null, thumbs: [], modalOpen: false, applyingFileId: null },
     key: { loading: false, taskStatus: null, taskId: null, thumbs: [], modalOpen: false, applyingFileId: null },
     last: { loading: false, taskStatus: null, taskId: null, thumbs: [], modalOpen: false, applyingFileId: null },
+  })
+  const selectedShotSourceLabel = useMemo(() => {
+    if (!selectedShot) return '分镜工作室'
+    const shotTitle = selectedShot.title?.trim()
+    return shotTitle ? `镜头：${shotTitle}` : `镜头：第 ${selectedShot.index} 镜`
+  }, [selectedShot])
+  useRelationTaskNotification({
+    task: videoTask,
+    settledTask: videoSettledTask,
+    title: TASK_COPY.videoGeneration.title,
+    sourceLabel: selectedShotSourceLabel,
+    runningDescription: TASK_COPY.videoGeneration.runningDescription,
+    cancellingDescription: TASK_COPY.videoGeneration.cancellingDescription,
+    successDescription: TASK_COPY.videoGeneration.successDescription,
+    cancelledDescription: TASK_COPY.videoGeneration.cancelledDescription,
+    failedDescription: TASK_COPY.videoGeneration.failedDescription,
+    onCancel:
+      videoTask?.taskId
+        ? () =>
+            void executeTaskCancel({
+              taskId: videoTask.taskId,
+              reason: '用户在分镜工作室取消视频生成任务',
+              applyCancelData: (data) => {
+                setVideoTask((current) => applyTaskCancelState(current, data))
+                return null
+              },
+              cancelledImmediatelyMessage: TASK_COPY.videoGeneration.cancelledImmediatelyMessage,
+              cancelRequestedMessage: TASK_COPY.videoGeneration.cancelRequestedMessage,
+              fallbackErrorMessage: '取消视频生成任务失败',
+            })
+        : null,
+    onNavigate: () => undefined,
+  })
+  useRelationTaskNotification({
+    task: promptTask,
+    settledTask: promptSettledTask,
+    title: TASK_COPY.shotFramePrompt.title,
+    sourceLabel: selectedShotSourceLabel,
+    runningDescription: TASK_COPY.shotFramePrompt.runningDescription,
+    cancellingDescription: TASK_COPY.shotFramePrompt.cancellingDescription,
+    successDescription: TASK_COPY.shotFramePrompt.successDescription,
+    cancelledDescription: TASK_COPY.shotFramePrompt.cancelledDescription,
+    failedDescription: TASK_COPY.shotFramePrompt.failedDescription,
+    onCancel:
+      promptTask?.taskId
+        ? () =>
+            void executeTaskCancel({
+              taskId: promptTask.taskId,
+              reason: '用户在分镜工作室取消分镜提示词生成任务',
+              applyCancelData: (data) => {
+                setPromptTask((current) => applyTaskCancelState(current, data))
+                return null
+              },
+              cancelledImmediatelyMessage: TASK_COPY.shotFramePrompt.cancelledImmediatelyMessage,
+              cancelRequestedMessage: TASK_COPY.shotFramePrompt.cancelRequestedMessage,
+              fallbackErrorMessage: '取消分镜提示词生成任务失败',
+            })
+        : null,
+    onNavigate: () => undefined,
+  })
+  useRelationTaskNotification({
+    task: frameImageTask,
+    settledTask: frameImageSettledTask,
+    title: TASK_COPY.shotFrameImage.title,
+    sourceLabel: selectedShotSourceLabel,
+    runningDescription: TASK_COPY.shotFrameImage.runningDescription,
+    cancellingDescription: TASK_COPY.shotFrameImage.cancellingDescription,
+    successDescription: TASK_COPY.shotFrameImage.successDescription,
+    cancelledDescription: TASK_COPY.shotFrameImage.cancelledDescription,
+    failedDescription: TASK_COPY.shotFrameImage.failedDescription,
+    onCancel:
+      frameImageTask?.taskId
+        ? () =>
+            void executeTaskCancel({
+              taskId: frameImageTask.taskId,
+              reason: '用户在分镜工作室取消关键帧图片生成任务',
+              applyCancelData: (data) => {
+                setFrameImageTask((current) => applyTaskCancelState(current, data))
+                return null
+              },
+              cancelledImmediatelyMessage: TASK_COPY.shotFrameImage.cancelledImmediatelyMessage,
+              cancelRequestedMessage: TASK_COPY.shotFrameImage.cancelRequestedMessage,
+              fallbackErrorMessage: '取消关键帧图片生成任务失败',
+            })
+        : null,
+    onNavigate: () => undefined,
   })
   const showAvTab = false
   const showGenRefParams = false
@@ -3723,10 +3791,16 @@ function Inspector(props: {
         message.error('视频生成任务创建失败：缺少任务 ID')
         return
       }
-      message.success('已创建视频生成任务')
       setVideoTaskId(taskId)
       setVideoTaskStatus('pending')
       setVideoTaskPolling(true)
+      setVideoTask({
+        taskId,
+        status: 'pending',
+        progress: 0,
+        cancelRequested: false,
+      })
+      setVideoSettledTask(null)
       setVideoPromptPreviewOpen(false)
     } catch {
       message.error('发起视频生成失败')
@@ -3740,19 +3814,29 @@ function Inspector(props: {
     let cancelled = false
     void (async () => {
       try {
-        let finalStatus: string | null = null
+        let finalTaskState: RelationTaskState | null = null
         for (let i = 0; i < 60; i += 1) {
           await sleep(2000)
           if (cancelled) return
           const statusRes = await FilmService.getTaskStatusApiV1FilmTasksTaskIdStatusGet({ taskId: videoTaskId })
           const status = statusRes.data?.status ?? null
           if (!status) continue
-          finalStatus = status
+          if (statusRes.data) {
+            finalTaskState = toRelationTaskStateFromStatusRead(statusRes.data)
+            setVideoTask(finalTaskState)
+          }
           setVideoTaskStatus(status)
           if (status === 'succeeded' || status === 'failed' || status === 'cancelled') break
         }
-        if (!cancelled && finalStatus && (finalStatus === 'failed' || finalStatus === 'cancelled')) {
-          message.error('视频生成任务失败')
+        if (
+          !cancelled &&
+          finalTaskState &&
+          (finalTaskState.status === 'succeeded' ||
+            finalTaskState.status === 'failed' ||
+            finalTaskState.status === 'cancelled')
+        ) {
+          setVideoTask(null)
+          setVideoSettledTask(finalTaskState)
         }
       } catch {
         if (!cancelled) {
@@ -3861,21 +3945,40 @@ function Inspector(props: {
         message.error('生成任务创建失败：缺少任务 ID')
         return
       }
+      setPromptTask({
+        taskId,
+        status: 'pending',
+        progress: 0,
+        cancelRequested: false,
+      })
+      setPromptSettledTask(null)
 
       let finalStatus = 'pending'
+      let finalTaskState: RelationTaskState | null = null
       for (let i = 0; i < 30; i += 1) {
         await sleep(2000)
         const statusRes = await FilmService.getTaskStatusApiV1FilmTasksTaskIdStatusGet({ taskId })
         const status = statusRes.data?.status
         if (!status) continue
         finalStatus = status
+        if (statusRes.data) {
+          finalTaskState = toRelationTaskStateFromStatusRead(statusRes.data)
+          setPromptTask(finalTaskState)
+        }
         if (status === 'succeeded' || status === 'failed' || status === 'cancelled') break
+      }
+      if (
+        finalTaskState &&
+        (finalTaskState.status === 'succeeded' ||
+          finalTaskState.status === 'failed' ||
+          finalTaskState.status === 'cancelled')
+      ) {
+        setPromptTask(null)
+        setPromptSettledTask(finalTaskState)
       }
 
       if (finalStatus !== 'succeeded') {
-        if (finalStatus === 'failed' || finalStatus === 'cancelled') {
-          message.error('生成提示词失败')
-        } else {
+        if (finalStatus !== 'failed' && finalStatus !== 'cancelled') {
           message.warning('生成任务仍在执行，请稍后重试')
         }
         return
@@ -3951,24 +4054,43 @@ function Inspector(props: {
         return
       }
       updateCardState(frameType, { taskId })
+      setFrameImageTask({
+        taskId,
+        status: 'pending',
+        progress: 0,
+        cancelRequested: false,
+      })
+      setFrameImageSettledTask(null)
 
       let finalStatus = 'pending'
+      let finalTaskState: RelationTaskState | null = null
       for (let i = 0; i < 30; i += 1) {
         await sleep(2000)
         const statusRes = await FilmService.getTaskStatusApiV1FilmTasksTaskIdStatusGet({ taskId })
         const status = statusRes.data?.status
         if (!status) continue
         finalStatus = status
+        if (statusRes.data) {
+          finalTaskState = toRelationTaskStateFromStatusRead(statusRes.data)
+          setFrameImageTask(finalTaskState)
+        }
         updateCardState(frameType, { taskStatus: status })
         if (status === 'succeeded' || status === 'failed' || status === 'cancelled') break
+      }
+      if (
+        finalTaskState &&
+        (finalTaskState.status === 'succeeded' ||
+          finalTaskState.status === 'failed' ||
+          finalTaskState.status === 'cancelled')
+      ) {
+        setFrameImageTask(null)
+        setFrameImageSettledTask(finalTaskState)
       }
       if (finalStatus === 'succeeded') {
         const latestSlotId = await getLatestFrameSlotId(frameType)
         await loadCardThumbs(frameType, latestSlotId, 5)
         setKeyframePromptPreviewOpen(false)
-      } else if (finalStatus === 'failed' || finalStatus === 'cancelled') {
-        message.error(`${frameLabel[frameType]}生成失败`)
-      } else {
+      } else if (finalStatus !== 'failed' && finalStatus !== 'cancelled') {
         message.warning('生成任务仍在执行，请稍后刷新')
       }
     } catch {

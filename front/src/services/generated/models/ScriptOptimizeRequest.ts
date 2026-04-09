@@ -7,6 +7,14 @@
  */
 export type ScriptOptimizeRequest = {
     /**
+     * 项目 ID（异步任务关联可选）
+     */
+    project_id?: (string | null);
+    /**
+     * 章节 ID（异步任务关联可选）
+     */
+    chapter_id?: (string | null);
+    /**
      * 原文剧本文本
      */
     script_text: string;

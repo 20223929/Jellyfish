@@ -125,7 +125,7 @@ async def create_actor_image_generation_task(
         )
     image_row = await _validate_actor_image_service(db, actor_id=actor_id, image_id=body.image_id)
     ref_images = await _resolve_reference_image_refs_by_file_ids_service(db, file_ids=body.images)
-    created = await _create_image_task_and_link_service(
+    task_id = await _create_image_task_and_link_service(
         db=db,
         model_id=body.model_id,
         relation_type="actor_image",
@@ -133,7 +133,7 @@ async def create_actor_image_generation_task(
         prompt=prompt,
         images=ref_images if ref_images else None,
     )
-    return created_response(created)
+    return created_response(TaskCreated(task_id=task_id))
 
 
 @router.post(
@@ -187,7 +187,7 @@ async def create_asset_image_generation_task(
     )
     ref_images = await _resolve_reference_image_refs_by_file_ids_service(db, file_ids=body.images)
 
-    created = await _create_image_task_and_link_service(
+    task_id = await _create_image_task_and_link_service(
         db=db,
         model_id=body.model_id,
         relation_type=relation_type,
@@ -195,7 +195,7 @@ async def create_asset_image_generation_task(
         prompt=prompt,
         images=ref_images if ref_images else None,
     )
-    return created_response(created)
+    return created_response(TaskCreated(task_id=task_id))
 
 
 @router.post(
@@ -243,7 +243,7 @@ async def create_character_image_generation_task(
         )
     image_row = await _validate_character_image_service(db, character_id=character_id, image_id=body.image_id)
     ref_images = await _resolve_reference_image_refs_by_file_ids_service(db, file_ids=body.images)
-    created = await _create_image_task_and_link_service(
+    task_id = await _create_image_task_and_link_service(
         db=db,
         model_id=body.model_id,
         relation_type="character_image",
@@ -251,7 +251,7 @@ async def create_character_image_generation_task(
         prompt=prompt,
         images=ref_images if ref_images else None,
     )
-    return created_response(created)
+    return created_response(TaskCreated(task_id=task_id))
 
 
 @router.post(
@@ -323,7 +323,7 @@ async def create_shot_frame_image_generation_task(
         if not shot_frame_image.format:
             shot_frame_image.format = "png"
 
-    created = await _create_image_task_and_link_service(
+    task_id = await _create_image_task_and_link_service(
         db=db,
         model_id=body.model_id,
         relation_type="shot_frame_image",
@@ -331,7 +331,7 @@ async def create_shot_frame_image_generation_task(
         prompt=prompt,
         images=ref_images if ref_images else None,
     )
-    return created_response(created)
+    return created_response(TaskCreated(task_id=task_id))
 
 
 @router.post(

@@ -92,7 +92,7 @@ pnpm run openapi:update
 - `openapi:update` 会先拉取 `http://127.0.0.1:8000/openapi.json` 到 `front/openapi.json`，再生成代码到 `front/src/services/generated/`
 - 如需修改请求基础地址，可配置 `VITE_BACKEND_URL`（构建时）或在部署时通过 `BACKEND_URL` 运行时注入（`front/index.html` 引入 `/env.js`），见 `front/src/services/openapi.ts`
 
-## 🐳 Docker 一键启动（MySQL + RustFS + Backend + Front）
+## 🐳 Docker 一键启动（MySQL + Redis + RustFS + Backend + Celery Worker + Front）
 
 项目已提供开箱即用的 compose 编排，文件位于 `deploy/compose/`。
 
@@ -101,6 +101,7 @@ pnpm run openapi:update
 - 前端：`http://localhost:7788`
 - 后端：`http://localhost:8000`（`/docs` 为 Swagger）
 - MySQL：`localhost:${MYSQL_PORT:-3306}`
+- Redis：`localhost:${REDIS_PORT:-6379}`
 - RustFS（S3 API）：`http://localhost:${RUSTFS_PORT:-9000}`（Console：`http://localhost:${RUSTFS_CONSOLE_PORT:-9001}`）
 
 ### 启动
@@ -115,6 +116,55 @@ docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.y
 
 - `001-init-prompt-template.sql`
 - `002-add-shot-extracted-candidates.sql`
+
+另外，compose 还会启动：
+
+- `redis`
+  - 作为 Celery broker
+- `celery-worker`
+  - 负责执行 `divide / extract` 等长耗时任务
+
+### Redis / Celery Broker 配置
+
+compose 环境变量中可单独配置 Redis：
+
+- `REDIS_PORT`
+- `REDIS_DB`
+- `REDIS_PASSWORD`
+
+如果**未显式设置** `CELERY_BROKER_URL`，后端会自动按以下规则拼接：
+
+```text
+redis://[:password@]REDIS_HOST:REDIS_PORT/REDIS_DB
+```
+
+在 compose 场景下默认使用：
+
+```text
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=${REDIS_DB:-0}
+```
+
+### Celery 首轮联调检查
+
+完成启动后，建议优先验证：
+
+1. `redis` 为 `healthy`
+2. `celery-worker` 日志中出现 `ready`
+3. 触发：
+   - 分镜管理页的 `一键提取分镜`
+   - 分镜编辑页的 `提取并刷新候选`
+4. 页面刷新后继续查看：
+   - 章节详情
+   - 分镜列表
+   - `/api/v1/film/tasks/{task_id}/status`
+
+联调成功的核心判断标准：
+
+- `divide / extract` 任务由 `celery-worker` 承担主要耗时执行
+- `backend` 仍然能继续响应其他接口
+- 页面刷新后任务状态仍能恢复
 
 ## 🧑‍💻 开发环境启动（前后端分离）
 
@@ -142,13 +192,13 @@ pnpm install
 pnpm dev
 ```
 
-### （可选）仅启动依赖服务 MySQL + RustFS
+### （可选）仅启动依赖服务 MySQL + Redis + RustFS
 
-如果你希望开发时使用 MySQL + RustFS（而不是默认 SQLite），可以只启动基础设施服务：
+如果你希望开发时使用 MySQL + Redis + RustFS（而不是默认 SQLite），可以只启动基础设施服务：
 
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
-docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml up -d mysql rustfs
+docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml up -d mysql redis rustfs
 ```
 
 ### Git 提交说明格式

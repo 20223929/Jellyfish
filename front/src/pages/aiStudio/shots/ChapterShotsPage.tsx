@@ -20,6 +20,7 @@ import {
 import type { TableColumnsType } from 'antd'
 import {
   ArrowLeftOutlined,
+  CloseCircleOutlined,
   DeleteOutlined,
   EditOutlined,
   FileSearchOutlined,
@@ -30,8 +31,14 @@ import {
 } from '@ant-design/icons'
 import type { ShotRead, ShotRuntimeSummaryRead, ShotStatus } from '../../../services/generated'
 import { ScriptProcessingService, StudioChaptersService, StudioShotsService } from '../../../services/generated'
+import { executeAsyncTaskCreate, executeTaskCancel } from '../components/taskActionHelpers'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
-import { getChapterShotEditPath, getChapterStudioPath } from '../project/ProjectWorkbench/routes'
+import { getChapterShotEditPath, getChapterShotsPath, getChapterStudioPath } from '../project/ProjectWorkbench/routes'
+import { useCancelableRelationTask } from '../project/ProjectWorkbench/chapterDivisionTasks'
+import { useRelationTaskNotification } from '../components/taskNotificationHelpers'
+import { useTaskPageContext } from '../components/taskPageContext'
+import { createTaskSettledReloader } from '../components/taskResultHelpers'
+import { TASK_COPY } from '../components/taskCopy'
 
 const { Header, Content } = Layout
 type ShotListFilter = 'all' | 'pending' | 'generating' | 'ready'
@@ -96,6 +103,7 @@ function getShotPreparationState(shot: ShotRead, runtime?: ShotRuntimeState): Sh
 }
 
 export function ChapterShotsPage() {
+  const taskCopy = TASK_COPY.chapterDivision
   const navigate = useNavigate()
   const { projectId, chapterId } = useParams<{ projectId: string; chapterId: string }>()
   const [loading, setLoading] = useState(false)
@@ -115,6 +123,7 @@ export function ChapterShotsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [createSubmitting, setCreateSubmitting] = useState(false)
   const [createForm] = Form.useForm<{ title: string; script_excerpt?: string }>()
+  const [chapterDivisionTaskLoading, setChapterDivisionTaskLoading] = useState(false)
 
   const refresh = async () => {
     if (!chapterId) return
@@ -155,6 +164,24 @@ export function ChapterShotsPage() {
       setLoading(false)
     }
   }
+
+  const reloadShotsAfterTaskSettled = useCallback(createTaskSettledReloader(refresh), [refresh])
+  const { task: chapterDivisionTask, settledTask: chapterDivisionSettledTask, trackTaskData, applyCancelData } = useCancelableRelationTask({
+    enabled: !!chapterId,
+    relationType: 'chapter_division',
+    relationEntityId: chapterId,
+    onTaskSettled: reloadShotsAfterTaskSettled,
+  })
+  useTaskPageContext(
+    chapterId
+      ? [
+          {
+            relationType: 'chapter_division',
+            relationEntityId: chapterId,
+          },
+        ]
+      : [],
+  )
 
   useEffect(() => {
     setSelectedRowKeys([])
@@ -260,21 +287,63 @@ export function ChapterShotsPage() {
     }
     setExtracting(true)
     try {
-      await ScriptProcessingService.divideScriptApiV1ScriptProcessingDividePost({
-        requestBody: {
-          script_text: scriptText,
-          write_to_db: true,
-          chapter_id: chapterId,
-        },
+      await executeAsyncTaskCreate({
+        request: () =>
+          ScriptProcessingService.divideScriptAsyncApiV1ScriptProcessingDivideAsyncPost({
+            requestBody: {
+              script_text: scriptText,
+              write_to_db: true,
+              chapter_id: chapterId,
+            },
+          }),
+        trackTaskData,
+        startedMessage: taskCopy.startedMessage,
+        reusedMessage: taskCopy.reusedMessage,
+        fallbackErrorMessage: '启动分镜提取失败',
+        getErrorMessage: (error) => getErrorMessage(error),
       })
-      message.success('已提取分镜')
-      await refresh()
-    } catch (e: unknown) {
-      message.error(getErrorMessage(e))
+    } catch {
+      // executeAsyncTaskCreate 已统一处理错误提示
     } finally {
       setExtracting(false)
     }
   }, [chapterCondensedText, chapterId, chapterRawText])
+
+  const handleCancelChapterDivisionTask = useCallback(async () => {
+    if (!chapterDivisionTask) return
+    setChapterDivisionTaskLoading(true)
+    try {
+      await executeTaskCancel({
+        taskId: chapterDivisionTask.taskId,
+        reason: '用户在分镜列表页取消分镜提取',
+        applyCancelData,
+        cancelledImmediatelyMessage: taskCopy.cancelledImmediatelyMessage,
+        cancelRequestedMessage: taskCopy.cancelRequestedMessage,
+        fallbackErrorMessage: '取消任务失败',
+      })
+    } catch {
+      // executeTaskCancel 已统一处理错误提示
+    } finally {
+      setChapterDivisionTaskLoading(false)
+    }
+  }, [chapterDivisionTask])
+
+  useRelationTaskNotification({
+    task: chapterDivisionTask,
+    settledTask: chapterDivisionSettledTask,
+    title: taskCopy.title,
+    sourceLabel: chapterTitle ? `章节：${chapterTitle}` : '分镜管理页',
+    runningDescription: taskCopy.runningDescription,
+    cancellingDescription: taskCopy.cancellingDescription,
+    successDescription: taskCopy.successDescription,
+    cancelledDescription: taskCopy.cancelledDescription,
+    failedDescription: taskCopy.failedDescription,
+    onCancel: chapterDivisionTask ? () => void handleCancelChapterDivisionTask() : null,
+    onNavigate:
+      projectId && chapterId
+        ? () => navigate(getChapterShotsPath(projectId, chapterId))
+        : null,
+  })
 
   const handleDelete = useCallback(
     async (shotId: string) => {
@@ -561,7 +630,11 @@ export function ChapterShotsPage() {
               ) : null}
               <Tooltip
                 title={
-                  shots.length > 0 ? '已存在分镜时不允许同步分镜，需先清空分镜' : undefined
+                  chapterDivisionTask
+                    ? '当前章节已有分镜提取任务在运行'
+                    : shots.length > 0
+                      ? '已存在分镜时不允许同步分镜，需先清空分镜'
+                      : undefined
                 }
               >
                 <span>
@@ -569,10 +642,10 @@ export function ChapterShotsPage() {
                     type={shots.length === 0 ? 'primary' : 'default'}
                     icon={<ScissorOutlined />}
                     loading={extracting}
-                    disabled={extracting || shots.length > 0}
+                    disabled={extracting || shots.length > 0 || !!chapterDivisionTask}
                     onClick={() => void handleOneClickExtract()}
                   >
-                    {shots.length === 0 ? '一键提取分镜' : '重新提取需先清空分镜'}
+                    {chapterDivisionTask ? '分镜提取中' : shots.length === 0 ? '一键提取分镜' : '重新提取需先清空分镜'}
                   </Button>
                 </span>
               </Tooltip>
@@ -587,6 +660,17 @@ export function ChapterShotsPage() {
               >
                 刷新
               </Button>
+              {chapterDivisionTask ? (
+                <Button
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  loading={chapterDivisionTaskLoading}
+                  disabled={chapterDivisionTask.cancelRequested || chapterDivisionTaskLoading}
+                  onClick={() => void handleCancelChapterDivisionTask()}
+                >
+                  {chapterDivisionTask.cancelRequested ? '正在取消' : '取消提取'}
+                </Button>
+              ) : null}
             </Space>
           }
         >

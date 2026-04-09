@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.task_manager import DeliveryMode, SqlAlchemyTaskStore, TaskManager
 from app.dependencies import get_db
 from app.models.task_links import GenerationTaskLink
-from app.services.film.generated_video import build_run_args, preview_prompt_and_images, run_video_generation_task
-from app.services.studio import mark_shot_generating
+from app.services.film.generated_video import build_run_args, preview_prompt_and_images
+from app.services.studio.shot_status import mark_shot_generating
+from app.tasks.execute_task import enqueue_task_execution
 from app.schemas.common import ApiResponse, created_response, success_response
 
 from .common import TaskCreated, _CreateOnlyTask
@@ -71,6 +70,7 @@ async def create_video_generation_task(
     task_record = await tm.create(
         task=_CreateOnlyTask(),
         mode=DeliveryMode.async_polling,
+        task_kind="video_generation",
         run_args=run_args,
     )
     db.add(
@@ -86,5 +86,5 @@ async def create_video_generation_task(
     # 确保任务记录已提交，避免后台 runner 新 session 查询不到任务行而无法更新状态。
     await db.commit()
 
-    asyncio.create_task(run_video_generation_task(task_id=task_record.id, run_args=run_args))
+    enqueue_task_execution(task_record.id)
     return created_response(TaskCreated(task_id=task_record.id))

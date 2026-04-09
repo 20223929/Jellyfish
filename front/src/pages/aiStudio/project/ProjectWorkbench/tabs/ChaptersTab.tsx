@@ -1,15 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Button, Tag, Space, Table, Empty, Modal, Input, Dropdown, message } from 'antd'
 import type { MenuProps, TableColumnsType } from 'antd'
 import {
   EditOutlined,
   FileSearchOutlined,
+  LoadingOutlined,
   MoreOutlined,
   PlusOutlined,
   ScissorOutlined,
+  StopOutlined,
+  SyncOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { StudioChaptersService } from '../../../../../services/generated'
+import { ScriptProcessingService, StudioChaptersService } from '../../../../../services/generated'
 import { chapterStatusMap } from '../constants'
 import { getChapterShotsPath, getChapterStudioPath } from '../routes'
 import { useChapters, newId, type Chapter } from '../hooks/useProjectData'
@@ -17,12 +20,22 @@ import { ChapterRawTextEditorModal } from '../../../chapter/components/ChapterRa
 import { ensureHasShotsBeforeShooting } from '../ensureHasShotsBeforeShooting'
 import { getChapterPreparationState } from '../chapterPreparation'
 import { loadChapterFlowStats, type ChapterFlowStats } from '../projectFlowStats'
+import { executeAsyncTaskCreate, executeTaskCancel } from '../../../components/taskActionHelpers'
+import { TASK_COPY } from '../../../components/taskCopy'
+import { useTaskPageContext } from '../../../components/taskPageContext'
+import { useTaskUiStore } from '../../../components/taskUiStore'
+import {
+  createRelationTaskState,
+  upsertRelationTaskStateInMap,
+  useChapterDivisionTaskMapPolling,
+} from '../chapterDivisionTasks'
 
 const { TextArea } = Input
 const CREATE_PARAM = 'create'
 const EDIT_PARAM = 'edit'
 
 export function ChaptersTab() {
+  const taskCopy = TASK_COPY.chapterDivision
   const navigate = useNavigate()
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -34,6 +47,23 @@ export function ChaptersTab() {
   const [createTitle, setCreateTitle] = useState('')
   const [createContent, setCreateContent] = useState('')
   const [chapterFlowMap, setChapterFlowMap] = useState<Record<string, ChapterFlowStats>>({})
+  const [chapterDivisionActionId, setChapterDivisionActionId] = useState<string | null>(null)
+  const taskUiUpsert = useTaskUiStore((state) => state.upsertTask)
+  const taskUiRemove = useTaskUiStore((state) => state.removeTask)
+  const syncedTaskIdsRef = useRef<string[]>([])
+  const chapterIds = useMemo(() => chapters.map((chapter) => chapter.id), [chapters])
+  useTaskPageContext(
+    chapterIds.map((id) => ({
+      relationType: 'chapter_division',
+      relationEntityId: id,
+    })),
+  )
+  const { taskMap: chapterDivisionTaskMap, setTrackedTaskMap: setChapterDivisionTaskMap } = useChapterDivisionTaskMapPolling({
+    chapterIds,
+    onTasksSettled: async () => {
+      await refresh()
+    },
+  })
 
   const createParam = searchParams.get(CREATE_PARAM)
   const editParam = searchParams.get(EDIT_PARAM)
@@ -193,6 +223,11 @@ export function ChaptersTab() {
 
   const handlePrimaryAction = (record: Chapter) => {
     if (!projectId) return
+    const activeTask = chapterDivisionTaskMap[record.id]
+    if (activeTask) {
+      navigate(getChapterShotsPath(projectId, record.id))
+      return
+    }
     const state = getChapterPreparationState(record)
     if (state.key === 'edit_raw') {
       openEditModal(record)
@@ -214,9 +249,110 @@ export function ChaptersTab() {
     })
   }
 
+  const handleDivideAsync = async (record: Chapter) => {
+    const scriptText = record.rawText?.trim()
+    if (!scriptText) {
+      message.warning('请先补章节原文')
+      return
+    }
+    setChapterDivisionActionId(record.id)
+    try {
+      await executeAsyncTaskCreate({
+        request: () =>
+          ScriptProcessingService.divideScriptAsyncApiV1ScriptProcessingDivideAsyncPost({
+            requestBody: {
+              chapter_id: record.id,
+              script_text: scriptText,
+              write_to_db: true,
+            },
+          }),
+        trackTaskData: (data) => {
+          const tracked = createRelationTaskState(data)
+          setChapterDivisionTaskMap(upsertRelationTaskStateInMap(chapterDivisionTaskMap, record.id, tracked))
+          return tracked
+        },
+        startedMessage: taskCopy.startedMessage,
+        reusedMessage: taskCopy.reusedMessage,
+        fallbackErrorMessage: '启动分镜提取失败',
+      })
+    } catch {
+      // executeAsyncTaskCreate 已统一处理错误提示
+    } finally {
+      setChapterDivisionActionId(null)
+    }
+  }
+
+  const handleCancelDivideTask = async (record: Chapter) => {
+    const activeTask = chapterDivisionTaskMap[record.id]
+    if (!activeTask) return
+    setChapterDivisionActionId(record.id)
+    try {
+      await executeTaskCancel({
+        taskId: activeTask.taskId,
+        reason: '用户在章节页取消分镜提取',
+        applyCancelData: (data) => {
+          if (!data?.task_id || !data?.status) return null
+          const tracked = createRelationTaskState(
+            {
+              task_id: data.task_id,
+              status: data.status,
+            },
+            { cancelRequested: data.cancel_requested ?? false },
+          )
+          setChapterDivisionTaskMap(upsertRelationTaskStateInMap(chapterDivisionTaskMap, record.id, tracked))
+          return tracked
+        },
+        cancelledImmediatelyMessage: taskCopy.cancelledImmediatelyMessage,
+        cancelRequestedMessage: taskCopy.cancelRequestedMessage,
+        fallbackErrorMessage: '取消任务失败',
+      })
+    } catch {
+      // executeTaskCancel 已统一处理错误提示
+    } finally {
+      setChapterDivisionActionId(null)
+    }
+  }
+
+  useEffect(() => {
+    const nextTaskIds: string[] = []
+
+    chapters.forEach((chapter) => {
+      const task = chapterDivisionTaskMap[chapter.id]
+      if (!task) return
+      nextTaskIds.push(task.taskId)
+      taskUiUpsert({
+        taskId: task.taskId,
+        title: taskCopy.title,
+        sourceLabel: chapter.title ? `章节：${chapter.title}` : '项目工作台章节列表',
+        status: task.status,
+        progress: task.progress,
+        cancelRequested: task.cancelRequested,
+        startedAtTs: task.startedAtTs,
+        finishedAtTs: task.finishedAtTs,
+        elapsedMs: task.elapsedMs,
+        onCancel: () => void handleCancelDivideTask(chapter),
+        onNavigate: projectId ? () => navigate(getChapterShotsPath(projectId, chapter.id)) : null,
+      })
+    })
+
+    syncedTaskIdsRef.current
+      .filter((taskId) => !nextTaskIds.includes(taskId))
+      .forEach((taskId) => taskUiRemove(taskId))
+
+    syncedTaskIdsRef.current = nextTaskIds
+  }, [chapterDivisionTaskMap, chapters, handleCancelDivideTask, navigate, projectId, taskCopy.title, taskUiRemove, taskUiUpsert])
+
+  useEffect(() => {
+    return () => {
+      syncedTaskIdsRef.current.forEach((taskId) => taskUiRemove(taskId))
+      syncedTaskIdsRef.current = []
+    }
+  }, [taskUiRemove])
+
   const buildActionMenuItems = (record: Chapter): MenuProps['items'] => {
     if (!projectId) return []
     const state = getChapterPreparationState(record)
+    const activeTask = chapterDivisionTaskMap[record.id]
     return [
       {
         key: 'shots',
@@ -238,6 +374,15 @@ export function ChaptersTab() {
         icon: <EditOutlined />,
         onClick: () => openEditModal(record),
       },
+      activeTask
+        ? {
+            key: 'cancel_divide',
+            label: activeTask.cancelRequested ? '取消请求已发出' : '取消分镜提取',
+            icon: <StopOutlined />,
+            disabled: activeTask.cancelRequested || chapterDivisionActionId === record.id,
+            onClick: () => void handleCancelDivideTask(record),
+          }
+        : null,
     ].filter(Boolean)
   }
 
@@ -265,6 +410,19 @@ export function ChaptersTab() {
       key: 'preparation',
       width: 180,
       render: (_, record) => {
+        const activeTask = chapterDivisionTaskMap[record.id]
+        if (activeTask) {
+          return (
+            <div className="space-y-1">
+              <Tag color={activeTask.cancelRequested ? 'orange' : 'processing'}>
+                {activeTask.cancelRequested ? '正在取消提取' : '分镜提取中'}
+              </Tag>
+              <div className="text-[11px] text-gray-500 leading-5">
+                {activeTask.cancelRequested ? '已请求取消，将在当前步骤结束后停止' : '系统正在异步提取当前章节分镜'}
+              </div>
+            </div>
+          )
+        }
         const state = getChapterPreparationState(record)
         return (
           <div className="space-y-1">
@@ -309,25 +467,53 @@ export function ChaptersTab() {
       title: '操作',
       key: 'action',
       width: 230,
-      render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => handlePrimaryAction(record)}
-            style={{ minWidth: 132, justifyContent: 'center' }}
-            icon={getChapterPreparationState(record).primaryIcon}
-          >
-            {getChapterPreparationState(record).primaryAction}
-          </Button>
-          <Dropdown
-            trigger={['click']}
-            menu={{ items: buildActionMenuItems(record) }}
-          >
-            <Button size="small" icon={<MoreOutlined />} aria-label="更多操作" />
-          </Dropdown>
-        </Space>
-      ),
+      render: (_, record) => {
+        const state = getChapterPreparationState(record)
+        const activeTask = chapterDivisionTaskMap[record.id]
+        const primaryIcon = activeTask
+          ? activeTask.cancelRequested
+            ? <SyncOutlined spin />
+            : <LoadingOutlined />
+          : state.primaryIcon
+        const primaryText = activeTask
+          ? activeTask.cancelRequested
+            ? '查看取消进度'
+            : '查看提取进度'
+          : state.primaryAction
+        const primaryLoading = chapterDivisionActionId === record.id && state.key === 'extract_shots' && !activeTask
+
+        return (
+          <Space size={8}>
+            <Button
+              type="primary"
+              size="small"
+              onClick={() => {
+                if (state.key === 'extract_shots' && !activeTask) {
+                  void handleDivideAsync(record)
+                  return
+                }
+                handlePrimaryAction(record)
+              }}
+              style={{ minWidth: 132, justifyContent: 'center' }}
+              icon={primaryIcon}
+              loading={primaryLoading}
+            >
+              {primaryText}
+            </Button>
+            <Dropdown
+              trigger={['click']}
+              menu={{ items: buildActionMenuItems(record) }}
+            >
+              <Button
+                size="small"
+                icon={<MoreOutlined />}
+                aria-label="更多操作"
+                loading={chapterDivisionActionId === record.id && !!activeTask}
+              />
+            </Dropdown>
+          </Space>
+        )
+      },
     },
   ]
 

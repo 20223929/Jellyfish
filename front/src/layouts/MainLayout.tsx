@@ -13,6 +13,8 @@ import {
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../store/useAppStore'
 import { useTranslation } from 'react-i18next'
+import { TaskCenter } from '../pages/aiStudio/components/TaskCenter'
+import { TaskRuntimeProvider } from '../pages/aiStudio/components/TaskRuntimeProvider'
 
 const { Header, Sider, Content } = Layout
 
@@ -253,26 +255,28 @@ const MainLayout: React.FC = () => {
           </Space>
         </Header>
 
-        <Content
-          style={{
-            margin: 0,
-            padding: 5,
-            background: token.colorBgLayout,
-            flex: 1,
-            minHeight: 0,
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <div className="w-full h-full min-h-0 overflow-hidden flex flex-col">
-            <Outlet />
-          </div>
-        </Content>
+        <TaskRuntimeProvider>
+          <Content
+            style={{
+              margin: 0,
+              padding: 5,
+              background: token.colorBgLayout,
+              flex: 1,
+              minHeight: 0,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div className="w-full h-full min-h-0 overflow-hidden flex flex-col">
+              <Outlet />
+            </div>
+          </Content>
+          <TaskCenter />
+        </TaskRuntimeProvider>
       </Layout>
     </Layout>
   )
 }
 
 export default MainLayout
-

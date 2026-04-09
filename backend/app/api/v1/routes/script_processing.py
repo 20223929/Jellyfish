@@ -40,6 +40,34 @@ from app.schemas.skills.costume_info_analysis import CostumeInfoAnalysisResult
 from app.schemas.skills.prop_info_analysis import PropInfoAnalysisResult
 from app.schemas.skills.scene_info_analysis import SceneInfoAnalysisResult
 from app.services.common import required_field
+from app.services.script_processing_tasks import (
+    create_consistency_task,
+    create_costume_info_task,
+    create_divide_task,
+    create_extract_task,
+    create_character_portrait_task,
+    create_merge_task,
+    create_prop_info_task,
+    create_scene_info_task,
+    create_script_optimization_task,
+    create_script_simplification_task,
+    create_variant_task,
+    pick_consistency_relation_entity_id,
+    pick_merge_relation_entity_id,
+    pick_analysis_relation_entity_id,
+    pick_variant_relation_entity_id,
+    spawn_consistency_task,
+    spawn_costume_info_task,
+    spawn_divide_task,
+    spawn_extract_task,
+    spawn_character_portrait_task,
+    spawn_merge_task,
+    spawn_prop_info_task,
+    spawn_scene_info_task,
+    spawn_script_optimization_task,
+    spawn_script_simplification_task,
+    spawn_variant_task,
+)
 from app.services.script_extraction_cache import (
     build_script_extract_cache_key,
     get_cached_script_extract,
@@ -50,6 +78,7 @@ from app.services.studio import (
     sync_shot_extracted_candidates_from_draft,
     sync_shot_extracted_dialogue_candidates_from_draft,
 )
+from app.api.v1.routes.film.common import AsyncTaskCreateRead
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +101,39 @@ class ScriptDividerRequest(BaseModel):
 
 
 @router.post(
+    "/divide-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步将剧本分割为多个镜头",
+    description="创建章节分镜提取任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def divide_script_async(
+    request: ScriptDividerRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    if not request.chapter_id:
+        raise HTTPException(status_code=400, detail=required_field("chapter_id", when="divide-async"))
+
+    task_info = await create_divide_task(
+        db,
+        chapter_id=request.chapter_id,
+        script_text=request.script_text,
+        write_to_db=request.write_to_db,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_divide_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/divide",
     response_model=ApiResponse[ScriptDivisionResult],
     summary="将剧本分割为多个镜头",
@@ -79,6 +141,7 @@ class ScriptDividerRequest(BaseModel):
         "输入完整剧本文本，输出分镜列表（index/start_line/end_line/script_excerpt/"
         "shot_name/time_of_day）。"
         "注意：此阶段不强制稳定ID，角色以“称呼/名字”弱信息输出，稳定ID在合并阶段统一分配。"
+        "当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 divide-async。"
     )
 )
 async def divide_script(
@@ -127,6 +190,8 @@ async def divide_script(
 
 class EntityMergerRequest(BaseModel):
     """实体合并请求。"""
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     all_shot_extractions: list[dict[str, Any]] = Field(
         ...,
         description="所有镜头提取结果（ShotElementExtractionResult 的序列化形式）"
@@ -150,6 +215,43 @@ class EntityMergerRequest(BaseModel):
 
 
 @router.post(
+    "/merge-entities-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步合并多镜头的实体信息",
+    description="创建实体合并任务并立即返回 task_id；当前保留为预备能力，尚无真实前端入口。",
+)
+async def merge_entities_async(
+    request: EntityMergerRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_merge_relation_entity_id(
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+    )
+    task_info = await create_merge_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        all_shot_extractions=request.all_shot_extractions,
+        historical_library=request.historical_library,
+        script_division=request.script_division,
+        previous_merge=request.previous_merge,
+        conflict_resolutions=request.conflict_resolutions,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_merge_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/merge-entities",
     response_model=ApiResponse[EntityMergeResult],
     summary="合并多镜头的实体信息",
@@ -158,6 +260,7 @@ class EntityMergerRequest(BaseModel):
         "角色库/地点库/场景库/道具库（静态画像 + 变体列表）。"
         "该步骤会统一分配稳定ID（如 char_001/loc_001/prop_001/scene_001）。"
         "当提供 previous_merge 与 conflict_resolutions 时，将进行冲突重试合并，优先消解 conflicts 并尽量保持 ID 稳定。"
+        "当前接口保留为预备能力，尚无真实前端入口。"
     )
 )
 async def merge_entities(
@@ -204,6 +307,8 @@ async def merge_entities(
 
 class VariantAnalysisRequest(BaseModel):
     """变体分析请求。"""
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     merged_library: dict[str, Any] = Field(
         ...,
         description="合并后的实体库（EntityLibrary 的序列化形式；来自 EntityMerger 输出的 merged_library）"
@@ -219,10 +324,45 @@ class VariantAnalysisRequest(BaseModel):
 
 
 @router.post(
+    "/analyze-variants-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步分析服装/外形变体",
+    description="创建变体分析任务并立即返回 task_id；当前保留为预备能力，尚无真实前端入口。",
+)
+async def analyze_variants_async(
+    request: VariantAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_variant_relation_entity_id(
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+    )
+    task_info = await create_variant_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        merged_library=request.merged_library,
+        all_shot_extractions=request.all_shot_extractions,
+        script_division=request.script_division,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_variant_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/analyze-variants",
     response_model=ApiResponse[VariantAnalysisResult],
     summary="分析服装/外形变体",
-    description="检测角色服装/外形变化，构建演变时间线，生成章节变体建议列表与变体建议。"
+    description="检测角色服装/外形变化，构建演变时间线，生成章节变体建议列表与变体建议。当前接口保留为预备能力，尚无真实前端入口。"
 )
 async def analyze_variants(
     request: VariantAnalysisRequest,
@@ -264,14 +404,49 @@ async def analyze_variants(
 
 class ScriptConsistencyCheckRequest(BaseModel):
     """一致性检查请求（角色混淆）。"""
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     script_text: str = Field(..., description="完整剧本文本", min_length=1)
+
+
+@router.post(
+    "/check-consistency-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步检查角色混淆一致性（基于原文）",
+    description="创建一致性检查任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def check_consistency_async(
+    request: ScriptConsistencyCheckRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_consistency_relation_entity_id(
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+    )
+    task_info = await create_consistency_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        script_text=request.script_text,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_consistency_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
 
 
 @router.post(
     "/check-consistency",
     response_model=ApiResponse[ScriptConsistencyCheckResult],
     summary="检查角色混淆一致性（基于原文）",
-    description="检测同一角色在不同段落/镜头被赋予不同身份/行为主体导致混淆，并给出修改建议。"
+    description="检测同一角色在不同段落/镜头被赋予不同身份/行为主体导致混淆，并给出修改建议。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 check-consistency-async。"
 )
 async def check_consistency(
     request: ScriptConsistencyCheckRequest,
@@ -306,6 +481,9 @@ async def check_consistency(
 class CharacterPortraitAnalysisRequest(BaseModel):
     """人物画像缺失信息分析请求。"""
 
+    relation_entity_id: str | None = Field(None, description="任务关联实体 ID（资产页恢复任务可选）")
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     character_context: str | None = Field(
         None,
         description="原文人物上下文（可为空；用于提供额外背景，帮助判断缺失信息）",
@@ -314,10 +492,46 @@ class CharacterPortraitAnalysisRequest(BaseModel):
 
 
 @router.post(
+    "/analyze-character-portrait-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步分析人物画像缺失信息",
+    description="创建人物画像分析任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def analyze_character_portrait_async(
+    request: CharacterPortraitAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_analysis_relation_entity_id(
+        relation_entity_id=request.relation_entity_id,
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+        endpoint="analyze-character-portrait-async",
+    )
+    task_info = await create_character_portrait_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        character_context=request.character_context,
+        character_description=request.character_description,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_character_portrait_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/analyze-character-portrait",
     response_model=ApiResponse[CharacterPortraitAnalysisResult],
     summary="分析人物画像缺失信息",
-    description="根据原文人物上下文与人物描述，判断缺少哪些关键信息，并给出优化后的人物画像描述。",
+    description="根据原文人物上下文与人物描述，判断缺少哪些关键信息，并给出优化后的人物画像描述。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 analyze-character-portrait-async。",
 )
 async def analyze_character_portrait(
     request: CharacterPortraitAnalysisRequest,
@@ -344,6 +558,9 @@ async def analyze_character_portrait(
 class PropInfoAnalysisRequest(BaseModel):
     """道具信息缺失分析请求。"""
 
+    relation_entity_id: str | None = Field(None, description="任务关联实体 ID（资产页恢复任务可选）")
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     prop_context: str | None = Field(
         None,
         description="原文道具上下文（可为空；用于提供额外背景，帮助判断缺失信息）",
@@ -352,10 +569,46 @@ class PropInfoAnalysisRequest(BaseModel):
 
 
 @router.post(
+    "/analyze-prop-info-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步分析道具信息缺失项",
+    description="创建道具信息分析任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def analyze_prop_info_async(
+    request: PropInfoAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_analysis_relation_entity_id(
+        relation_entity_id=request.relation_entity_id,
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+        endpoint="analyze-prop-info-async",
+    )
+    task_info = await create_prop_info_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        prop_context=request.prop_context,
+        prop_description=request.prop_description,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_prop_info_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/analyze-prop-info",
     response_model=ApiResponse[PropInfoAnalysisResult],
     summary="分析道具信息缺失项",
-    description="根据原文道具上下文与道具描述，判断缺少哪些关键信息，并给出优化后的可生成道具描述。",
+    description="根据原文道具上下文与道具描述，判断缺少哪些关键信息，并给出优化后的可生成道具描述。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 analyze-prop-info-async。",
 )
 async def analyze_prop_info(
     request: PropInfoAnalysisRequest,
@@ -382,6 +635,9 @@ async def analyze_prop_info(
 class SceneInfoAnalysisRequest(BaseModel):
     """场景信息缺失分析请求。"""
 
+    relation_entity_id: str | None = Field(None, description="任务关联实体 ID（资产页恢复任务可选）")
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     scene_context: str | None = Field(
         None,
         description="原文场景上下文（可为空；用于提供额外背景，帮助判断缺失信息）",
@@ -390,10 +646,46 @@ class SceneInfoAnalysisRequest(BaseModel):
 
 
 @router.post(
+    "/analyze-scene-info-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步分析场景信息缺失项",
+    description="创建场景信息分析任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def analyze_scene_info_async(
+    request: SceneInfoAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_analysis_relation_entity_id(
+        relation_entity_id=request.relation_entity_id,
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+        endpoint="analyze-scene-info-async",
+    )
+    task_info = await create_scene_info_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        scene_context=request.scene_context,
+        scene_description=request.scene_description,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_scene_info_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/analyze-scene-info",
     response_model=ApiResponse[SceneInfoAnalysisResult],
     summary="分析场景信息缺失项",
-    description="根据原文场景上下文与场景描述，判断缺少哪些关键信息，并给出优化后的可生成场景描述。",
+    description="根据原文场景上下文与场景描述，判断缺少哪些关键信息，并给出优化后的可生成场景描述。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 analyze-scene-info-async。",
 )
 async def analyze_scene_info(
     request: SceneInfoAnalysisRequest,
@@ -420,6 +712,9 @@ async def analyze_scene_info(
 class CostumeInfoAnalysisRequest(BaseModel):
     """服装信息缺失分析请求。"""
 
+    relation_entity_id: str | None = Field(None, description="任务关联实体 ID（资产页恢复任务可选）")
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     costume_context: str | None = Field(
         None,
         description="原文服装上下文（可为空；用于提供额外背景，帮助判断缺失信息）",
@@ -428,10 +723,46 @@ class CostumeInfoAnalysisRequest(BaseModel):
 
 
 @router.post(
+    "/analyze-costume-info-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步分析服装信息缺失项",
+    description="创建服装信息分析任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def analyze_costume_info_async(
+    request: CostumeInfoAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_analysis_relation_entity_id(
+        relation_entity_id=request.relation_entity_id,
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+        endpoint="analyze-costume-info-async",
+    )
+    task_info = await create_costume_info_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        costume_context=request.costume_context,
+        costume_description=request.costume_description,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_costume_info_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/analyze-costume-info",
     response_model=ApiResponse[CostumeInfoAnalysisResult],
     summary="分析服装信息缺失项",
-    description="根据原文服装上下文与服装描述，判断缺少哪些关键信息，并给出优化后的可生成服装描述。",
+    description="根据原文服装上下文与服装描述，判断缺少哪些关键信息，并给出优化后的可生成服装描述。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 analyze-costume-info-async。",
 )
 async def analyze_costume_info(
     request: CostumeInfoAnalysisRequest,
@@ -458,6 +789,8 @@ async def analyze_costume_info(
 
 class ScriptOptimizeRequest(BaseModel):
     """剧本优化请求（基于一致性检查结果）。"""
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     script_text: str = Field(..., description="原文剧本文本", min_length=1)
     consistency: dict[str, Any] = Field(..., description="一致性检查输出（ScriptConsistencyCheckResult 序列化）")
 
@@ -465,14 +798,51 @@ class ScriptOptimizeRequest(BaseModel):
 class ScriptSimplifyRequest(BaseModel):
     """智能精简剧本请求。"""
 
+    project_id: str | None = Field(None, description="项目 ID（异步任务关联可选）")
+    chapter_id: str | None = Field(None, description="章节 ID（异步任务关联可选）")
     script_text: str = Field(..., description="原文剧本文本", min_length=1)
+
+
+@router.post(
+    "/optimize-script-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步基于一致性检查优化剧本",
+    description="创建剧本优化任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def optimize_script_async(
+    request: ScriptOptimizeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_analysis_relation_entity_id(
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+        endpoint="optimize-script-async",
+    )
+    task_info = await create_script_optimization_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        script_text=request.script_text,
+        consistency=request.consistency,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_script_optimization_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
 
 
 @router.post(
     "/optimize-script",
     response_model=ApiResponse[ScriptOptimizationResult],
     summary="基于一致性检查优化剧本",
-    description="将一致性检查输出及原文作为输入，生成优化后的剧本（尽量少改，只改与角色混淆 issues 相关段落）。"
+    description="将一致性检查输出及原文作为输入，生成优化后的剧本（尽量少改，只改与角色混淆 issues 相关段落）。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 optimize-script-async。"
 )
 async def optimize_script(
     request: ScriptOptimizeRequest,
@@ -500,7 +870,7 @@ async def optimize_script(
     "/simplify-script",
     response_model=ApiResponse[ScriptSimplificationResult],
     summary="智能精简剧本",
-    description="在保留剧情主体并保证剧情连续的前提下精简剧本文本。",
+    description="在保留剧情主体并保证剧情连续的前提下精简剧本文本。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 simplify-script-async。",
 )
 async def simplify_script(
     request: ScriptSimplifyRequest,
@@ -519,6 +889,40 @@ async def simplify_script(
         )
 
 
+@router.post(
+    "/simplify-script-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步智能精简剧本",
+    description="创建剧本精简任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def simplify_script_async(
+    request: ScriptSimplifyRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    relation_entity_id = pick_analysis_relation_entity_id(
+        chapter_id=request.chapter_id,
+        project_id=request.project_id,
+        endpoint="simplify-script-async",
+    )
+    task_info = await create_script_simplification_task(
+        db,
+        relation_entity_id=relation_entity_id,
+        script_text=request.script_text,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_script_simplification_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
 # ============================================================================
 # 7. ElementExtractorAgent - 项目级提取（最终输出）
 # ============================================================================
@@ -533,10 +937,42 @@ class ScriptExtractRequest(BaseModel):
 
 
 @router.post(
+    "/extract-async",
+    response_model=ApiResponse[AsyncTaskCreateRead],
+    summary="异步项目级信息提取（最终输出）",
+    description="创建项目级信息提取任务并立即返回 task_id；前端可通过任务状态接口轮询。",
+)
+async def extract_script_async(
+    request: ScriptExtractRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AsyncTaskCreateRead]:
+    task_info = await create_extract_task(
+        db,
+        project_id=request.project_id,
+        chapter_id=request.chapter_id,
+        script_division=request.script_division,
+        consistency=request.consistency,
+        refresh_cache=request.refresh_cache,
+    )
+    await db.commit()
+    if not task_info.reused:
+        spawn_extract_task(task_info.task_id)
+    return success_response(
+        AsyncTaskCreateRead(
+            task_id=task_info.task_id,
+            status=task_info.status,
+            reused=task_info.reused,
+            relation_type=task_info.relation_type,
+            relation_entity_id=task_info.relation_entity_id,
+        )
+    )
+
+
+@router.post(
     "/extract",
     response_model=ApiResponse[StudioScriptExtractionDraft],
     summary="项目级信息提取（最终输出）",
-    description="输入分镜结果（可选带一致性检查结果），输出可导入 Studio 的草稿结构（name-based，ID 由导入接口生成）。"
+    description="输入分镜结果（可选带一致性检查结果），输出可导入 Studio 的草稿结构（name-based，ID 由导入接口生成）。当前同步接口主要用于兼容旧调用与调试场景；页面主流程优先使用 extract-async。"
 )
 async def extract_script(
     request: ScriptExtractRequest,
@@ -610,7 +1046,7 @@ class FullProcessRequest(BaseModel):
     "/full-process",
     response_model=ApiResponse[StudioScriptExtractionDraft],
     summary="完整工作流处理",
-    description="新流程：一致性检查→（可选优化）→分镜→项目级信息提取（最终输出）"
+    description="新流程：一致性检查→（可选优化）→分镜→项目级信息提取（最终输出）。当前同步接口主要用于调试与串联验证，暂无真实前端主入口。"
 )
 async def full_process(
     request: FullProcessRequest,

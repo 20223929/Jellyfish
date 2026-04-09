@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.models.studio import (
     Chapter,
@@ -20,7 +21,7 @@ from app.models.studio import (
 from app.schemas.skills.script_processing import StudioScriptExtractionDraft
 from app.schemas.studio.shots import ShotExtractedDialogueCandidateAcceptRequest
 from app.services.common import entity_not_found
-from app.services.studio.shot_status import recompute_shot_status
+from app.services.studio.shot_status import recompute_shot_status, recompute_shot_status_sync
 
 
 def _utc_now() -> datetime:
@@ -101,6 +102,31 @@ async def sync_from_extraction_draft(
         )
 
 
+def sync_from_extraction_draft_sync(
+    db: Session,
+    *,
+    chapter_id: str,
+    draft: StudioScriptExtractionDraft,
+) -> None:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise ValueError(entity_not_found("Chapter"))
+
+    stmt = select(Shot).where(Shot.chapter_id == chapter_id)
+    shots = db.execute(stmt).scalars().all()
+    shot_by_index = {shot.index: shot for shot in shots}
+
+    for shot_draft in draft.shots:
+        shot = shot_by_index.get(shot_draft.index)
+        if shot is None:
+            continue
+        replace_for_shot_sync(
+            db,
+            shot_id=shot.id,
+            candidates=_build_candidates_from_shot_draft(shot_draft),
+        )
+
+
 async def replace_for_shot(
     db: AsyncSession,
     *,
@@ -161,6 +187,69 @@ async def replace_for_shot(
 
     await db.flush()
     await recompute_shot_status(db, shot_id=shot_id)
+    return rows
+
+
+def replace_for_shot_sync(
+    db: Session,
+    *,
+    shot_id: str,
+    candidates: list[dict[str, Any]],
+) -> list[ShotExtractedDialogueCandidate]:
+    shot = db.get(Shot, shot_id)
+    if shot is None:
+        raise ValueError(entity_not_found("Shot"))
+
+    existing_stmt = select(ShotExtractedDialogueCandidate).where(
+        ShotExtractedDialogueCandidate.shot_id == shot_id
+    )
+    existing_rows = list(db.execute(existing_stmt).scalars().all())
+    accepted_by_key: dict[tuple[str, str, str], tuple[int | None, datetime | None]] = {}
+    for row in existing_rows:
+        if row.candidate_status != ShotDialogueCandidateStatus.accepted:
+            continue
+        key = (
+            str(row.text).strip(),
+            str(row.speaker_name or "").strip(),
+            str(row.target_name or "").strip(),
+        )
+        accepted_by_key[key] = (row.linked_dialog_line_id, row.confirmed_at)
+
+    db.execute(
+        delete(ShotExtractedDialogueCandidate).where(ShotExtractedDialogueCandidate.shot_id == shot_id)
+    )
+    shot.skip_extraction = False
+    shot.last_extracted_at = _utc_now()
+
+    rows: list[ShotExtractedDialogueCandidate] = []
+    for item in candidates:
+        text = str(item["text"]).strip()
+        speaker_name = item.get("speaker_name")
+        target_name = item.get("target_name")
+        key = (text, str(speaker_name or "").strip(), str(target_name or "").strip())
+        linked_dialog_line_id, confirmed_at = accepted_by_key.get(key, (None, None))
+        row = ShotExtractedDialogueCandidate(
+            shot_id=shot_id,
+            index=int(item.get("index") or 0),
+            text=text,
+            line_mode=_dialogue_line_mode(item.get("line_mode")),
+            speaker_name=speaker_name,
+            target_name=target_name,
+            candidate_status=(
+                ShotDialogueCandidateStatus.accepted
+                if linked_dialog_line_id
+                else ShotDialogueCandidateStatus.pending
+            ),
+            linked_dialog_line_id=linked_dialog_line_id,
+            source=str(item.get("source") or "extraction"),
+            payload=dict(item.get("payload") or {}),
+            confirmed_at=confirmed_at,
+        )
+        db.add(row)
+        rows.append(row)
+
+    db.flush()
+    recompute_shot_status_sync(db, shot_id=shot_id)
     return rows
 
 

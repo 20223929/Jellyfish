@@ -18,6 +18,9 @@ class TaskStatusRead(BaseModel):
     progress: int = Field(..., ge=0, le=100, description="进度 0-100")
     result: dict[str, Any] | None = None
     error: str = ""
+    started_at_ts: float | None = None
+    finished_at_ts: float | None = None
+    elapsed_ms: int | None = None
     updated_at_ts: float | None = None
 
 
@@ -26,4 +29,3 @@ class TaskCreateRead(BaseModel):
     mode: DeliveryMode
     status: TaskStatus
     progress: int = Field(..., ge=0, le=100)
-

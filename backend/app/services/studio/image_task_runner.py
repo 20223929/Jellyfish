@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +20,6 @@ from app.models.studio import (
 )
 from app.models.task_links import GenerationTaskLink
 from app.models.types import FileUsageKind
-from app.schemas.common import ApiResponse, success_response
 from app.services.studio.file_usages import (
     first_project_id_for_actor,
     first_project_id_for_costume,
@@ -34,8 +31,25 @@ from app.services.studio.file_usages import (
 )
 from app.services.studio.shot_status import mark_shot_generating, recompute_shot_status
 from app.services.studio.image_tasks import load_provider_config, resolve_image_model
+from app.services.worker.async_task_support import cancel_if_requested_async
+from app.services.worker.task_logging import log_task_event, log_task_failure
 from app.utils.files import create_file_from_url_or_b64
-from app.api.v1.routes.film.common import TaskCreated, _CreateOnlyTask
+
+
+class _CreateOnlyTask:
+    """仅用于 TaskManager.create：提供 __class__.__name__，避免传入 lambda。"""
+
+    async def run(self, *args: object, **kwargs: object):  # noqa: ANN001, ANN003
+        return None
+
+    async def status(self) -> dict[str, object]:
+        return {}
+
+    async def is_done(self) -> bool:
+        return False
+
+    async def get_result(self) -> object:
+        return None
 
 
 async def _persist_images_to_assets(
@@ -230,7 +244,7 @@ async def create_image_task_and_link(
     relation_entity_id: str,
     prompt: str,
     images: list[dict[str, str]] | None = None,
-) -> TaskCreated:
+) -> str:
     """创建图片生成任务，并建立任务关联。"""
     store = SqlAlchemyTaskStore(db)
     tm = TaskManager(store=store, strategies={})
@@ -242,6 +256,8 @@ async def create_image_task_and_link(
         "provider": provider_cfg.provider,
         "api_key": provider_cfg.api_key,
         "base_url": provider_cfg.base_url,
+        "relation_type": relation_type,
+        "relation_entity_id": relation_entity_id,
         "input": {
             "prompt": prompt,
             "model": model.name,
@@ -253,6 +269,7 @@ async def create_image_task_and_link(
     task_record = await tm.create(
         task=_CreateOnlyTask(),
         mode=DeliveryMode.async_polling,
+        task_kind="image_generation",
         run_args=run_args,
     )
 
@@ -273,63 +290,85 @@ async def create_image_task_and_link(
         await mark_shot_generating(db, shot_id=related_shot_id)
     await db.commit()
 
-    async def _runner(task_id: str, args: dict) -> None:
-        async with async_session_maker() as session:
-            try:
-                store = SqlAlchemyTaskStore(session)
-                await store.set_status(task_id, TaskStatus.running)
-                await store.set_progress(task_id, 10)
+    from app.tasks.execute_task import enqueue_task_execution
 
-                provider = str(args.get("provider") or "")
-                api_key = str(args.get("api_key") or "")
-                base_url = args.get("base_url")
-                input_dict = dict(args.get("input") or {})
+    enqueue_task_execution(task_record.id)
+    return task_record.id
 
-                task = ImageGenerationTask(
-                    provider_config=ProviderConfig(
-                        provider=provider,  # type: ignore[arg-type]
-                        api_key=api_key,
-                        base_url=base_url,
-                    ),
-                    input_=ImageGenerationInput.model_validate(input_dict),
-                )
-                await task.run()
-                result = await task.get_result()
-                if result is None:
-                    raise RuntimeError("Image generation task returned no result")
 
-                await store.set_result(task_id, result.model_dump())
-                await _persist_images_to_assets(
-                    session,
-                    task_id=task_id,
-                    relation_type=relation_type,
-                    relation_entity_id=relation_entity_id,
-                    result=result,
-                )
-                await store.set_progress(task_id, 100)
-                await store.set_status(task_id, TaskStatus.succeeded)
+async def run_image_generation_task(
+    task_id: str,
+    run_args: dict,
+) -> None:
+    relation_type = str(run_args.get("relation_type") or "")
+    relation_entity_id = str(run_args.get("relation_entity_id") or "")
+
+    async with async_session_maker() as session:
+        try:
+            store = SqlAlchemyTaskStore(session)
+            await store.set_status(task_id, TaskStatus.running)
+            await store.set_progress(task_id, 10)
+            await session.commit()
+            log_task_event("image_generation", task_id, "running")
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("image_generation", task_id, "cancelled", stage="before_execute")
+                return
+
+            provider = str(run_args.get("provider") or "")
+            api_key = str(run_args.get("api_key") or "")
+            base_url = run_args.get("base_url")
+            input_dict = dict(run_args.get("input") or {})
+
+            task = ImageGenerationTask(
+                provider_config=ProviderConfig(
+                    provider=provider,  # type: ignore[arg-type]
+                    api_key=api_key,
+                    base_url=base_url,
+                ),
+                input_=ImageGenerationInput.model_validate(input_dict),
+            )
+            await task.run()
+            result = await task.get_result()
+            if result is None:
+                raise RuntimeError("Image generation task returned no result")
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("image_generation", task_id, "cancelled", stage="after_execute")
+                return
+
+            await store.set_result(task_id, result.model_dump())
+            await _persist_images_to_assets(
+                session,
+                task_id=task_id,
+                relation_type=relation_type,
+                relation_entity_id=relation_entity_id,
+                result=result,
+            )
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("image_generation", task_id, "cancelled", stage="after_persist")
+                return
+            await store.set_progress(task_id, 100)
+            await store.set_status(task_id, TaskStatus.succeeded)
+            related_shot_id = await _resolve_related_shot_id(
+                session,
+                relation_type=relation_type,
+                relation_entity_id=relation_entity_id,
+            )
+            if related_shot_id:
+                await recompute_shot_status(session, shot_id=related_shot_id)
+            await session.commit()
+            log_task_event("image_generation", task_id, "succeeded")
+        except Exception as exc:  # noqa: BLE001
+            await session.rollback()
+            async with async_session_maker() as s2:
+                store = SqlAlchemyTaskStore(s2)
+                await store.set_error(task_id, str(exc))
+                await store.set_status(task_id, TaskStatus.failed)
                 related_shot_id = await _resolve_related_shot_id(
-                    session,
+                    s2,
                     relation_type=relation_type,
                     relation_entity_id=relation_entity_id,
                 )
                 if related_shot_id:
-                    await recompute_shot_status(session, shot_id=related_shot_id)
-                await session.commit()
-            except Exception as exc:  # noqa: BLE001
-                await session.rollback()
-                async with async_session_maker() as s2:
-                    store = SqlAlchemyTaskStore(s2)
-                    await store.set_error(task_id, str(exc))
-                    await store.set_status(task_id, TaskStatus.failed)
-                    related_shot_id = await _resolve_related_shot_id(
-                        s2,
-                        relation_type=relation_type,
-                        relation_entity_id=relation_entity_id,
-                    )
-                    if related_shot_id:
-                        await recompute_shot_status(s2, shot_id=related_shot_id)
-                    await s2.commit()
-
-    asyncio.create_task(_runner(task_record.id, run_args))
-    return TaskCreated(task_id=task_record.id)
+                    await recompute_shot_status(s2, shot_id=related_shot_id)
+                await s2.commit()
+            log_task_failure("image_generation", task_id, str(exc))

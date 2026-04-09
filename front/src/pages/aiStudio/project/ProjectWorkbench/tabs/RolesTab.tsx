@@ -4,7 +4,6 @@ import { EditOutlined, PlusOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   StudioProjectsService,
-  StudioShotCharacterLinksService,
   StudioShotLinksService,
 } from '../../../../../services/generated'
 import type { ProjectActorLinkRead, ProjectCostumeLinkRead } from '../../../../../services/generated'
@@ -32,6 +31,31 @@ type CostumeLike = {
   thumbnail?: string
 }
 
+function notifyShotAssetCreatedAndLinked(payload: {
+  projectId?: string
+  chapterId?: string | null
+  shotId?: string | null
+  assetId?: string
+  assetName: string
+}) {
+  if (!payload.projectId || !payload.chapterId || !payload.shotId) return
+  try {
+    window.opener?.postMessage(
+      {
+        type: 'studio-shot-asset-created-and-linked',
+        projectId: payload.projectId,
+        chapterId: payload.chapterId,
+        shotId: payload.shotId,
+        assetId: payload.assetId ?? null,
+        assetName: payload.assetName,
+      },
+      window.location.origin,
+    )
+  } catch {
+    // 跨窗口通知失败不阻塞角色创建成功。
+  }
+}
+
 export function RolesTab() {
   const navigate = useNavigate()
   const { projectId } = useParams<{ projectId: string }>()
@@ -41,6 +65,7 @@ export function RolesTab() {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [pendingShotLinkShotId, setPendingShotLinkShotId] = useState<string | null>(null)
+  const [pendingShotLinkChapterId, setPendingShotLinkChapterId] = useState<string | null>(null)
   const [formName, setFormName] = useState('')
   const [formDesc, setFormDesc] = useState('')
   const [formActorId, setFormActorId] = useState<string | undefined>(undefined)
@@ -72,7 +97,9 @@ export function RolesTab() {
       setFormVisualStyle(nextVisual)
       setFormStyle(style || projectStyle || (PROJECT_STYLE_OPTIONS_BY_VISUAL[nextVisual]?.[0]?.value ?? '真人都市'))
       const shotIdFromUrl = searchParams.get('shotId')?.trim() ?? ''
+      const chapterIdFromUrl = searchParams.get('chapterId')?.trim() ?? ''
       setPendingShotLinkShotId(shotIdFromUrl || null)
+      setPendingShotLinkChapterId(chapterIdFromUrl || null)
       setCreateOpen(true)
       setSearchParams(
         (prev) => {
@@ -93,6 +120,7 @@ export function RolesTab() {
 
   const openNormalRoleCreate = useCallback(() => {
     setPendingShotLinkShotId(null)
+    setPendingShotLinkChapterId(null)
     setFormName('')
     setFormDesc('')
     setFormActorId(undefined)
@@ -212,6 +240,8 @@ export function RolesTab() {
       const createRes = await StudioEntitiesApi.create('character', {
         id: newId('char'),
         project_id: projectId,
+        chapter_id: pendingShotLinkChapterId,
+        shot_id: pendingShotLinkShotId,
         name,
         description: formDesc.trim() || undefined,
         visual_style: formVisualStyle || '现实',
@@ -221,25 +251,13 @@ export function RolesTab() {
       })
       const charId = (createRes.data as { id?: string } | undefined)?.id
       if (charId && pendingShotLinkShotId) {
-        try {
-          const linksRes = await StudioShotCharacterLinksService.listShotCharacterLinksApiV1StudioShotCharacterLinksGet({
-            shotId: pendingShotLinkShotId,
-          })
-          const links = (linksRes.data ?? []) as Array<{ index?: number | null }>
-          const maxIndex = links.reduce(
-            (m, it) => Math.max(m, typeof it?.index === 'number' ? it.index : -1),
-            -1,
-          )
-          await StudioShotCharacterLinksService.upsertShotCharacterLinkApiV1StudioShotCharacterLinksPost({
-            requestBody: {
-              shot_id: pendingShotLinkShotId,
-              character_id: charId,
-              index: maxIndex + 1,
-            },
-          })
-        } catch {
-          message.warning('角色已创建，但关联到当前分镜失败')
-        }
+        notifyShotAssetCreatedAndLinked({
+          projectId,
+          chapterId: pendingShotLinkChapterId,
+          shotId: pendingShotLinkShotId,
+          assetId: charId,
+          assetName: name,
+        })
       }
       message.success('角色创建成功')
       setCreateOpen(false)
@@ -250,10 +268,12 @@ export function RolesTab() {
       setFormVisualStyle(projectVisualStyle)
       setFormStyle(projectStyle)
       setPendingShotLinkShotId(null)
+      setPendingShotLinkChapterId(null)
       await refresh()
     } catch {
       message.error('创建失败')
       setPendingShotLinkShotId(null)
+      setPendingShotLinkChapterId(null)
     } finally {
       setCreating(false)
     }

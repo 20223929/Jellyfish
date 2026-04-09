@@ -2,7 +2,6 @@ import { Button, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   AppstoreOutlined,
-  ScissorOutlined,
   SettingOutlined,
   ThunderboltOutlined,
   VideoCameraOutlined,
@@ -10,22 +9,18 @@ import {
 
 type ChapterStudioBatchToolbarProps = {
   selectedCount: number
-  batchExtractingCandidates: boolean
   batchVideoReadinessLoading: boolean
   generating: boolean
   maintenanceMenuItems: MenuProps['items']
-  onBatchRefreshCandidates: () => void
   onBatchInspectVideoReadiness: () => void
   onBatchGenerate: () => void
 }
 
 export function ChapterStudioBatchToolbar({
   selectedCount,
-  batchExtractingCandidates,
   batchVideoReadinessLoading,
   generating,
   maintenanceMenuItems,
-  onBatchRefreshCandidates,
   onBatchInspectVideoReadiness,
   onBatchGenerate,
 }: ChapterStudioBatchToolbarProps) {
@@ -41,15 +36,6 @@ export function ChapterStudioBatchToolbar({
       </div>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-gray-600">已选 {selectedCount} 项</span>
-        <Button
-          size="small"
-          icon={<ScissorOutlined />}
-          loading={batchExtractingCandidates}
-          disabled={batchExtractingCandidates}
-          onClick={onBatchRefreshCandidates}
-        >
-          刷新候选后去确认
-        </Button>
         <Button
           size="small"
           icon={<VideoCameraOutlined />}

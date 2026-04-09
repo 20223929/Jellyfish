@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.models.studio import (
     Shot,
@@ -93,3 +94,58 @@ async def mark_shot_generating(db: AsyncSession, *, shot_id: str) -> ShotStatus:
     后续可在所有调用点迁移完成后再删除。
     """
     return await recompute_shot_status(db, shot_id=shot_id)
+
+
+def _count_candidates_sync(db: Session, *, shot_id: str) -> tuple[int, int]:
+    total_stmt = select(func.count(ShotExtractedCandidate.id)).where(
+        ShotExtractedCandidate.shot_id == shot_id
+    )
+    unresolved_stmt = (
+        select(func.count(ShotExtractedCandidate.id))
+        .where(ShotExtractedCandidate.shot_id == shot_id)
+        .where(ShotExtractedCandidate.candidate_status == ShotCandidateStatus.pending)
+    )
+    total = int(db.scalar(total_stmt) or 0)
+    unresolved = int(db.scalar(unresolved_stmt) or 0)
+    return total, unresolved
+
+
+def _count_dialogue_candidates_sync(db: Session, *, shot_id: str) -> tuple[int, int]:
+    total_stmt = select(func.count(ShotExtractedDialogueCandidate.id)).where(
+        ShotExtractedDialogueCandidate.shot_id == shot_id
+    )
+    unresolved_stmt = (
+        select(func.count(ShotExtractedDialogueCandidate.id))
+        .where(ShotExtractedDialogueCandidate.shot_id == shot_id)
+        .where(ShotExtractedDialogueCandidate.candidate_status == ShotDialogueCandidateStatus.pending)
+    )
+    total = int(db.scalar(total_stmt) or 0)
+    unresolved = int(db.scalar(unresolved_stmt) or 0)
+    return total, unresolved
+
+
+def recompute_shot_status_sync(db: Session, *, shot_id: str) -> ShotStatus:
+    shot = db.get(Shot, shot_id)
+    if shot is None:
+        raise ValueError(entity_not_found("Shot"))
+
+    if shot.skip_extraction:
+        shot.status = ShotStatus.ready
+        db.flush()
+        return shot.status
+
+    if shot.last_extracted_at is None:
+        shot.status = ShotStatus.pending
+        db.flush()
+        return shot.status
+
+    total_candidates, unresolved = _count_candidates_sync(db, shot_id=shot_id)
+    total_dialogue_candidates, unresolved_dialogue = _count_dialogue_candidates_sync(db, shot_id=shot_id)
+    if total_candidates == 0 and total_dialogue_candidates == 0:
+        shot.status = ShotStatus.ready
+        db.flush()
+        return shot.status
+
+    shot.status = ShotStatus.ready if unresolved == 0 and unresolved_dialogue == 0 else ShotStatus.pending
+    db.flush()
+    return shot.status

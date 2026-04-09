@@ -71,7 +71,25 @@ class CharacterBase(BaseModel):
 
 
 class CharacterCreate(CharacterBase):
-    pass
+    chapter_id: str | None = Field(None, description="可选：章节 ID")
+    shot_id: str | None = Field(None, description="可选：创建成功后自动绑定的分镜 ID")
+
+    @field_validator("project_id", "chapter_id", "shot_id", mode="before")
+    @classmethod
+    def _blank_link_ids(cls, v: object) -> object:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @model_validator(mode="after")
+    def _link_scope(self) -> Self:
+        if self.chapter_id and not self.project_id:
+            raise ValueError("project_id is required when chapter_id is set")
+        if self.shot_id and not self.project_id:
+            raise ValueError("project_id is required when shot_id is set")
+        return self
 
 
 class CharacterUpdate(BaseModel):

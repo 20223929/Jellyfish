@@ -5,6 +5,8 @@
 import type { ApiResponse_GenerationTaskLinkRead_ } from '../models/ApiResponse_GenerationTaskLinkRead_';
 import type { ApiResponse_NoneType_ } from '../models/ApiResponse_NoneType_';
 import type { ApiResponse_PaginatedData_GenerationTaskLinkRead__ } from '../models/ApiResponse_PaginatedData_GenerationTaskLinkRead__';
+import type { ApiResponse_PaginatedData_TaskListItemRead__ } from '../models/ApiResponse_PaginatedData_TaskListItemRead__';
+import type { ApiResponse_TaskCancelRead_ } from '../models/ApiResponse_TaskCancelRead_';
 import type { ApiResponse_TaskCreated_ } from '../models/ApiResponse_TaskCreated_';
 import type { ApiResponse_TaskLinkAdoptRead_ } from '../models/ApiResponse_TaskLinkAdoptRead_';
 import type { ApiResponse_TaskResultRead_ } from '../models/ApiResponse_TaskResultRead_';
@@ -13,7 +15,9 @@ import type { ApiResponse_VideoPromptPreviewResponse_ } from '../models/ApiRespo
 import type { GenerationTaskLinkCreate } from '../models/GenerationTaskLinkCreate';
 import type { GenerationTaskLinkUpdate } from '../models/GenerationTaskLinkUpdate';
 import type { ShotFramePromptRequest } from '../models/ShotFramePromptRequest';
+import type { TaskCancelRequest } from '../models/TaskCancelRequest';
 import type { TaskLinkAdoptRequest } from '../models/TaskLinkAdoptRequest';
+import type { TaskStatus } from '../models/TaskStatus';
 import type { VideoGenerationTaskRequest } from '../models/VideoGenerationTaskRequest';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
@@ -82,6 +86,66 @@ export class FilmService {
         });
     }
     /**
+     * 全局任务列表（任务中心）
+     * @returns ApiResponse_PaginatedData_TaskListItemRead__ Successful Response
+     * @throws ApiError
+     */
+    public static listTasksApiV1FilmTasksGet({
+        statuses,
+        taskKind,
+        relationType,
+        relationEntityId,
+        recentSeconds = 300,
+        page = 1,
+        pageSize = 20,
+    }: {
+        /**
+         * 按任务状态过滤，可多选
+         */
+        statuses?: (Array<TaskStatus> | null),
+        /**
+         * 按 task_kind 过滤
+         */
+        taskKind?: (string | null),
+        /**
+         * 按 relation_type 过滤
+         */
+        relationType?: (string | null),
+        /**
+         * 按 relation_entity_id 过滤
+         */
+        relationEntityId?: (string | null),
+        /**
+         * 默认返回最近结束任务的时间窗口（秒）
+         */
+        recentSeconds?: number,
+        /**
+         * 页码
+         */
+        page?: number,
+        /**
+         * 每页条数
+         */
+        pageSize?: number,
+    }): CancelablePromise<ApiResponse_PaginatedData_TaskListItemRead__> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/film/tasks',
+            query: {
+                'statuses': statuses,
+                'task_kind': taskKind,
+                'relation_type': relationType,
+                'relation_entity_id': relationEntityId,
+                'recent_seconds': recentSeconds,
+                'page': page,
+                'page_size': pageSize,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * 查询任务状态/进度（轮询）
      * @returns ApiResponse_TaskStatusRead_ Successful Response
      * @throws ApiError
@@ -118,6 +182,31 @@ export class FilmService {
             path: {
                 'task_id': taskId,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * 请求取消任务
+     * @returns ApiResponse_TaskCancelRead_ Successful Response
+     * @throws ApiError
+     */
+    public static cancelTaskApiV1FilmTasksTaskIdCancelPost({
+        taskId,
+        requestBody,
+    }: {
+        taskId: string,
+        requestBody: TaskCancelRequest,
+    }): CancelablePromise<ApiResponse_TaskCancelRead_> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/film/tasks/{task_id}/cancel',
+            path: {
+                'task_id': taskId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

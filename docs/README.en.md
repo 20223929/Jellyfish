@@ -74,7 +74,7 @@ Notes:
 - `openapi:update` fetches `http://127.0.0.1:8000/openapi.json` into `front/openapi.json`, then generates code under `front/src/services/generated/`.
 - To change the API base URL, use `VITE_BACKEND_URL` (build-time) or inject `BACKEND_URL` at runtime (served as `/env.js` and loaded by `front/index.html`); see `front/src/services/openapi.ts`.
 
-## 🐳 Run with Docker Compose (MySQL + RustFS + Backend + Front)
+## 🐳 Run with Docker Compose (MySQL + Redis + RustFS + Backend + Celery Worker + Front)
 
 The repository ships a ready-to-run compose setup under `deploy/compose/`.
 
@@ -83,6 +83,7 @@ The repository ships a ready-to-run compose setup under `deploy/compose/`.
 - Frontend: `http://localhost:7788`
 - Backend: `http://localhost:8000` (Swagger at `/docs`)
 - MySQL: `localhost:${MYSQL_PORT:-3306}`
+- Redis: `localhost:${REDIS_PORT:-6379}`
 - RustFS (S3 API): `http://localhost:${RUSTFS_PORT:-9000}` (Console: `http://localhost:${RUSTFS_CONSOLE_PORT:-9001}`)
 
 ### Start
@@ -97,6 +98,55 @@ After it succeeds, SQL files under `backend/sql/` will be imported automatically
 
 - `001-init-prompt-template.sql`
 - `002-add-shot-extracted-candidates.sql`
+
+Compose also starts:
+
+- `redis`
+  - used as the Celery broker
+- `celery-worker`
+  - executes long-running tasks such as `divide / extract`
+
+### Redis / Celery broker configuration
+
+You can configure Redis separately in compose via:
+
+- `REDIS_PORT`
+- `REDIS_DB`
+- `REDIS_PASSWORD`
+
+If `CELERY_BROKER_URL` is **not explicitly set**, the backend builds it from the Redis settings using:
+
+```text
+redis://[:password@]REDIS_HOST:REDIS_PORT/REDIS_DB
+```
+
+In the compose setup the defaults are:
+
+```text
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=${REDIS_DB:-0}
+```
+
+### First-round Celery verification
+
+After startup, verify the following first:
+
+1. `redis` is `healthy`
+2. `celery-worker` logs contain `ready`
+3. Trigger:
+   - `Extract storyboard` from the shot management page
+   - `Extract and refresh candidates` from the shot edit page
+4. Refresh the page and keep checking:
+   - chapter detail APIs
+   - shot list APIs
+   - `/api/v1/film/tasks/{task_id}/status`
+
+The main success criteria are:
+
+- long-running `divide / extract` work is executed by `celery-worker`
+- `backend` keeps responding to other APIs
+- task status can still be recovered after page refresh
 
 ## 🧑‍💻 Development setup (frontend & backend separately)
 
@@ -124,13 +174,13 @@ pnpm install
 pnpm dev
 ```
 
-### (Optional) Run only dependencies: MySQL + RustFS
+### (Optional) Run only dependencies: MySQL + Redis + RustFS
 
-If you want to use MySQL + RustFS in development (instead of the default SQLite), start only the infrastructure services:
+If you want to use MySQL + Redis + RustFS in development (instead of the default SQLite), start only the infrastructure services:
 
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
-docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml up -d mysql rustfs
+docker compose --env-file deploy/compose/.env -f deploy/compose/docker-compose.yml up -d mysql redis rustfs
 ```
 
 ### Git commit message format

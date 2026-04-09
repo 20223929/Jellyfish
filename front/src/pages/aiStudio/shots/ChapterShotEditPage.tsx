@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Button, Card, Divider, Empty, Layout, List, Modal, Popconfirm, Segmented, Space, Spin, Tabs, Tooltip, Typography, message } from 'antd'
-import { ArrowLeftOutlined, ClearOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ClearOutlined, CloseCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import type {
   EntityNameExistenceItem,
   ShotAssetOverviewItem,
@@ -21,17 +21,27 @@ import {
   StudioShotCharacterLinksService,
   StudioShotLinksService,
 } from '../../../services/generated'
+import { executeAsyncTaskCreate, executeTaskCancel, notifyExistingTask } from '../components/taskActionHelpers'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
-import { getChapterShotsPath, getChapterStudioPath } from '../project/ProjectWorkbench/routes'
+import { getChapterShotEditPath, getChapterShotsPath, getChapterStudioPath } from '../project/ProjectWorkbench/routes'
 import { DisplayImageCard } from '../assets/components/DisplayImageCard'
 import { ChapterShotAssetConfirmation } from './components/ChapterShotAssetConfirmation'
 import { ChapterShotBasicInfoSection } from './components/ChapterShotBasicInfoSection'
 import { ChapterShotDialogueConfirmation } from './components/ChapterShotDialogueConfirmation'
 import { ChapterShotPreparationGuide } from './components/ChapterShotPreparationGuide'
+import { useRelationTaskNotification } from '../components/taskNotificationHelpers'
+import { useTaskPageContext } from '../components/taskPageContext'
+import { createTaskSettledReloader } from '../components/taskResultHelpers'
+import { TASK_COPY } from '../components/taskCopy'
+import {
+  SCRIPT_EXTRACTION_RELATION_TYPE,
+  useCancelableRelationTask,
+} from '../project/ProjectWorkbench/chapterDivisionTasks'
 import { StudioEntitiesApi } from '../../../services/studioEntities'
 import { resolveAssetUrl } from '../assets/utils'
 
 const { Header, Content } = Layout
+const extractTaskCopy = TASK_COPY.scriptExtract
 
 type AssetKind = 'scene' | 'actor' | 'prop' | 'costume'
 type NamedDraft = { name: string; thumbnail?: string | null; id?: string | null; file_id?: string | null; description?: string | null }
@@ -42,6 +52,15 @@ type AssetVM = NamedDraft & {
   candidateStatus?: ShotAssetOverviewItem['candidate_status']
 }
 type ShotListFilter = 'all' | 'not_extracted' | 'pending'
+
+type ShotAssetCreatedAndLinkedMessage = {
+  type: 'studio-shot-asset-created-and-linked'
+  projectId?: string
+  chapterId?: string
+  shotId?: string
+  assetId?: string | null
+  assetName?: string
+}
 
 const DEFAULT_EXTRACTION_SUMMARY: ShotExtractionSummaryRead = {
   state: 'not_extracted',
@@ -184,6 +203,7 @@ export function ChapterShotEditPage() {
   const [skipExtractionUpdating, setSkipExtractionUpdating] = useState(false)
   const extractInFlightRef = useRef(false)
   const [selectedShotIds, setSelectedShotIds] = useState<string[]>(shotId ? [shotId] : [])
+  const pendingExternalAssetCreateRef = useRef(false)
 
   const [linkingOpen, setLinkingOpen] = useState(false)
   const [linkingLoading, setLinkingLoading] = useState(false)
@@ -420,6 +440,28 @@ export function ChapterShotEditPage() {
     }
   }, [shotId])
 
+  const reloadAfterExtractTaskSettled = useCallback(
+    createTaskSettledReloader(loadPage, loadAssetsOverview, loadDialogueCandidates),
+    [loadAssetsOverview, loadDialogueCandidates, loadPage],
+  )
+  const { task: extractTask, settledTask: extractSettledTask, trackTaskData: trackExtractTaskData, applyCancelData: applyExtractCancelData } = useCancelableRelationTask({
+    enabled: !!chapterId,
+    relationType: SCRIPT_EXTRACTION_RELATION_TYPE,
+    relationEntityId: chapterId,
+    onTaskSettled: reloadAfterExtractTaskSettled,
+  })
+  useTaskPageContext(
+    chapterId
+      ? [
+          {
+            relationType: SCRIPT_EXTRACTION_RELATION_TYPE,
+            relationEntityId: chapterId,
+          },
+        ]
+      : [],
+  )
+  const extractTaskActive = !!extractTask
+
   const refreshCurrentShot = useCallback(async () => {
     if (!shotId) return
     try {
@@ -622,6 +664,46 @@ export function ChapterShotEditPage() {
   }, [shotId])
 
   useEffect(() => {
+    if (!projectId || !chapterId || !shotId) return
+
+    const resetExistenceCache = () => {
+      setExistenceByKindName({
+        scene: {},
+        actor: {},
+        prop: {},
+        costume: {},
+      })
+    }
+
+    const refreshAfterExternalCreate = async () => {
+      pendingExternalAssetCreateRef.current = false
+      resetExistenceCache()
+      await refreshCurrentShot()
+      await loadAssetsOverview()
+    }
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return
+      const data = event.data as ShotAssetCreatedAndLinkedMessage | null
+      if (!data || data.type !== 'studio-shot-asset-created-and-linked') return
+      if (data.projectId !== projectId || data.chapterId !== chapterId || data.shotId !== shotId) return
+      void refreshAfterExternalCreate()
+    }
+
+    const handleFocus = () => {
+      if (!pendingExternalAssetCreateRef.current) return
+      void refreshAfterExternalCreate()
+    }
+
+    window.addEventListener('message', handleMessage)
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      window.removeEventListener('message', handleMessage)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [chapterId, loadAssetsOverview, projectId, refreshCurrentShot, shotId])
+
+  useEffect(() => {
     void loadAssetsOverview()
   }, [loadAssetsOverview])
 
@@ -693,6 +775,12 @@ export function ChapterShotEditPage() {
   const extractAssets = useCallback(async () => {
     if (!projectId || !chapterId || !shot) return
     if (extractInFlightRef.current) return
+    if (notifyExistingTask(extractTask, {
+      cancellingMessage: extractTaskCopy.cancellingMessage,
+      runningMessage: extractTaskCopy.runningMessage,
+    })) {
+      return
+    }
     extractInFlightRef.current = true
     setExtractingAssets(true)
     try {
@@ -708,38 +796,39 @@ export function ChapterShotEditPage() {
           },
         ],
       }
-      const res = await ScriptProcessingService.extractScriptApiV1ScriptProcessingExtractPost({
-        requestBody: {
-          project_id: projectId,
-          chapter_id: chapterId,
-          script_division: scriptDivision as any,
-          consistency: undefined,
-          refresh_cache: true,
-        } as any,
+      await executeAsyncTaskCreate({
+        request: () =>
+          ScriptProcessingService.extractScriptAsyncApiV1ScriptProcessingExtractAsyncPost({
+            requestBody: {
+              project_id: projectId,
+              chapter_id: chapterId,
+              script_division: scriptDivision as any,
+              consistency: undefined,
+              refresh_cache: true,
+            } as any,
+          }),
+        trackTaskData: trackExtractTaskData,
+        startedMessage: extractTaskCopy.startedMessage,
+        reusedMessage: extractTaskCopy.reusedMessage,
+        fallbackErrorMessage: '提取失败',
       })
-      const next = res.data
-      if (next) {
-        if (res.meta?.from_cache) {
-          message.success('已从缓存加载提取结果；页面会优先展示数据表中的待确认候选')
-        } else {
-          message.success('提取完成；页面会优先展示数据表中的待确认候选')
-        }
-        await loadAssetsOverview()
-        await loadDialogueCandidates()
-      } else {
-        message.error(res.message || '提取失败')
-      }
     } catch {
-      message.error('提取失败')
+      // executeAsyncTaskCreate 已统一处理错误提示
     } finally {
       setExtractingAssets(false)
       extractInFlightRef.current = false
     }
-  }, [chapterId, loadAssetsOverview, loadDialogueCandidates, projectId, shot])
+  }, [chapterId, extractTask, projectId, shot])
 
   const batchExtractAssets = useCallback(async () => {
     if (!projectId || !chapterId || selectedShots.length === 0) return
     if (extractInFlightRef.current) return
+    if (notifyExistingTask(extractTask, {
+      cancellingMessage: extractTaskCopy.cancellingMessage,
+      runningMessage: extractTaskCopy.runningMessage,
+    })) {
+      return
+    }
 
     const actionableShots = selectedShots
       .filter((item) => !item.skip_extraction)
@@ -763,34 +852,62 @@ export function ChapterShotEditPage() {
           shot_name: item.title ?? '',
         })),
       }
-      const res = await ScriptProcessingService.extractScriptApiV1ScriptProcessingExtractPost({
-        requestBody: {
-          project_id: projectId,
-          chapter_id: chapterId,
-          script_division: scriptDivision as any,
-          consistency: undefined,
-          refresh_cache: true,
-        } as any,
+      await executeAsyncTaskCreate({
+        request: () =>
+          ScriptProcessingService.extractScriptAsyncApiV1ScriptProcessingExtractAsyncPost({
+            requestBody: {
+              project_id: projectId,
+              chapter_id: chapterId,
+              script_division: scriptDivision as any,
+              consistency: undefined,
+              refresh_cache: true,
+            } as any,
+          }),
+        trackTaskData: trackExtractTaskData,
+        startedMessage: actionableShots.length > 1 ? `已开始提取 ${actionableShots.length} 条镜头` : extractTaskCopy.startedMessage,
+        reusedMessage: extractTaskCopy.reusedMessage,
+        fallbackErrorMessage: '批量提取失败',
       })
-      if (!res.data) {
-        message.error(res.message || '批量提取失败')
-        return
-      }
-      message.success(
-        res.meta?.from_cache
-          ? `已从缓存加载 ${actionableShots.length} 条镜头的提取结果，请继续确认候选`
-          : `已提取并刷新 ${actionableShots.length} 条镜头，请继续确认候选`,
-      )
-      await loadPage()
-      await loadAssetsOverview()
-      await loadDialogueCandidates()
     } catch {
-      message.error('批量提取失败')
+      // executeAsyncTaskCreate 已统一处理错误提示
     } finally {
       setBatchExtractingAssets(false)
       extractInFlightRef.current = false
     }
-  }, [chapterId, loadAssetsOverview, loadDialogueCandidates, loadPage, projectId, selectedShots])
+  }, [chapterId, extractTask, projectId, selectedShots])
+
+  const cancelExtractTask = useCallback(async () => {
+    if (!extractTask?.taskId) return
+    try {
+      await executeTaskCancel({
+        taskId: extractTask.taskId,
+        reason: '用户在分镜编辑页取消提取任务',
+        applyCancelData: applyExtractCancelData,
+        cancelledImmediatelyMessage: extractTaskCopy.cancelledImmediatelyMessage,
+        cancelRequestedMessage: extractTaskCopy.cancelRequestedMessage,
+        fallbackErrorMessage: '取消提取任务失败',
+      })
+    } catch {
+      // executeTaskCancel 已统一处理错误提示
+    }
+  }, [applyExtractCancelData, extractTask])
+
+  useRelationTaskNotification({
+    task: extractTask,
+    settledTask: extractSettledTask,
+    title: extractTaskCopy.title,
+    sourceLabel: shot?.title ? `镜头：${shot.title}` : '分镜编辑页',
+    runningDescription: extractTaskCopy.runningDescription,
+    cancellingDescription: extractTaskCopy.cancellingDescription,
+    successDescription: extractTaskCopy.successDescription,
+    cancelledDescription: extractTaskCopy.cancelledDescription,
+    failedDescription: extractTaskCopy.failedDescription,
+    onCancel: extractTask ? () => void cancelExtractTask() : null,
+    onNavigate:
+      projectId && chapterId && shotId
+        ? () => navigate(getChapterShotEditPath(projectId, chapterId, shotId))
+        : null,
+  })
 
   const goShot = (id: string) => {
     if (!projectId || !chapterId || id === shotId) return
@@ -916,6 +1033,7 @@ export function ChapterShotEditPage() {
             okText: '新建',
             cancelText: '取消',
             onOk: () => {
+              pendingExternalAssetCreateRef.current = true
               const open = (url: string) => window.open(url, '_blank', 'noopener,noreferrer')
               const descQ = asset.description?.trim()
                 ? `&desc=${encodeURIComponent(asset.description.trim())}`
@@ -1219,11 +1337,23 @@ export function ChapterShotEditPage() {
               <Button
                 type="primary"
                 size="small"
-                loading={extractingAssets}
+                loading={extractingAssets || extractTaskActive}
+                disabled={extractTaskActive}
                 onClick={() => void extractAssets()}
               >
                 提取并刷新候选
               </Button>
+              {extractTask ? (
+                <Button
+                  size="small"
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  disabled={extractTask.cancelRequested}
+                  onClick={() => void cancelExtractTask()}
+                >
+                  {extractTask.cancelRequested ? '正在取消' : '取消提取'}
+                </Button>
+              ) : null}
               {shot?.skip_extraction ? (
                 <Button
                   size="small"
@@ -1381,7 +1511,8 @@ export function ChapterShotEditPage() {
                             type="primary"
                             shape="circle"
                             icon={<ReloadOutlined />}
-                            loading={batchExtractingAssets}
+                            loading={batchExtractingAssets || extractTaskActive}
+                            disabled={extractTaskActive}
                             onClick={() => void batchExtractAssets()}
                           />
                         </Tooltip>
