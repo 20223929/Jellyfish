@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -185,6 +186,19 @@ def test_revoke_task_execution_revokes_celery_task(monkeypatch, tmp_path) -> Non
     assert calls == [("celery-task-revoke", True, "SIGTERM")]
 
     sync_engine.dispose()
+
+
+def test_async_delegating_executors_use_positional_runner_signature() -> None:
+    for task_kind, executor in task_executor_registry._executors.items():
+        if not isinstance(executor, AbstractAsyncDelegatingExecutor):
+            continue
+        signature = inspect.signature(executor._runner)
+        params = list(signature.parameters.values())
+        assert len(params) == 2, f"{task_kind} runner must accept exactly 2 params, got {signature}"
+        assert all(
+            param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            for param in params
+        ), f"{task_kind} runner must accept positional args, got {signature}"
 
 
 def test_async_delegating_executor_marks_failed_on_timeout(monkeypatch, tmp_path) -> None:

@@ -5,6 +5,7 @@
 import type { ApiResponse_RenderedPromptResponse_ } from '../models/ApiResponse_RenderedPromptResponse_';
 import type { ApiResponse_TaskCreated_ } from '../models/ApiResponse_TaskCreated_';
 import type { ShotFrameImageTaskRequest } from '../models/ShotFrameImageTaskRequest';
+import type { ShotFramePromptRenderRequest } from '../models/ShotFramePromptRenderRequest';
 import type { StudioImageTaskRequest } from '../models/StudioImageTaskRequest';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
@@ -212,7 +213,7 @@ export class StudioImageTasksService {
         requestBody,
     }: {
         shotId: string,
-        requestBody: ShotFrameImageTaskRequest,
+        requestBody: ShotFramePromptRenderRequest,
     }): CancelablePromise<ApiResponse_RenderedPromptResponse_> {
         return __request(OpenAPI, {
             method: 'POST',

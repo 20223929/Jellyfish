@@ -86,7 +86,6 @@ async def build_run_args(
 
 
 async def run_shot_frame_prompt_task(
-    *,
     task_id: str,
     run_args: dict,
 ) -> None:

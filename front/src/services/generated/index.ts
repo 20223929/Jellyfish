@@ -190,6 +190,7 @@ export type { ShotFrameImageCreate } from './models/ShotFrameImageCreate';
 export type { ShotFrameImageRead } from './models/ShotFrameImageRead';
 export type { ShotFrameImageTaskRequest } from './models/ShotFrameImageTaskRequest';
 export type { ShotFrameImageUpdate } from './models/ShotFrameImageUpdate';
+export type { ShotFramePromptRenderRequest } from './models/ShotFramePromptRenderRequest';
 export type { ShotFramePromptRequest } from './models/ShotFramePromptRequest';
 export type { ShotFrameType } from './models/ShotFrameType';
 export type { ShotLinkedAssetItem } from './models/ShotLinkedAssetItem';

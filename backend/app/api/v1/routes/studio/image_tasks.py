@@ -84,7 +84,7 @@ class ShotFrameImageTaskRequest(BaseModel):
     frame_type: ShotFrameType = Field(..., description="first | last | key")
     prompt: str = Field(
         ...,
-        description="提示词（由前端传入，必填）。frame-render-prompt 与创建任务接口均使用该字段。",
+        description="提示词（由前端传入，创建任务接口必填）。",
         min_length=1,
     )
     images: list[ShotLinkedAssetItem] = Field(
@@ -93,6 +93,24 @@ class ShotFrameImageTaskRequest(BaseModel):
             "参考资产条目列表（可多张，顺序有效）。后端会使用 item.file_id 作为参考图；"
             "无效条目会被跳过。"
         ),
+    )
+
+
+class ShotFramePromptRenderRequest(BaseModel):
+    """镜头分镜帧提示词渲染请求体。"""
+
+    frame_type: ShotFrameType = Field(..., description="first | last | key")
+    model_id: str | None = Field(
+        None,
+        description="保留字段，当前渲染接口不使用；用于与前端调用参数保持一致。",
+    )
+    prompt: str | None = Field(
+        None,
+        description="可选提示词。为空时由后端基于分镜数据自动生成；非空时将参考图说明拼接后直接返回。",
+    )
+    images: list[ShotLinkedAssetItem] = Field(
+        default_factory=list,
+        description="参考资产条目列表（可多张，顺序有效）。后端会使用 item.file_id 作为参考图；无效条目会被跳过。",
     )
 
 
@@ -342,7 +360,7 @@ async def create_shot_frame_image_generation_task(
 )
 async def render_shot_frame_prompt(
     shot_id: str,
-    body: ShotFrameImageTaskRequest,
+    body: ShotFramePromptRenderRequest,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[RenderedPromptResponse]:
     prompt = (body.prompt or "").strip()

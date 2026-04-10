@@ -5,23 +5,21 @@
 import type { ShotFrameType } from './ShotFrameType';
 import type { ShotLinkedAssetItem } from './ShotLinkedAssetItem';
 /**
- * 镜头分镜帧图片生成请求体：只根据 `shot_id + frame_type` 定位 ShotFrameImage。
- *
- * 用于替代旧接口中通过 `image_id` 直接传入 ShotFrameImage.id 的方式。
+ * 镜头分镜帧提示词渲染请求体。
  */
-export type ShotFrameImageTaskRequest = {
-    /**
-     * 可选模型 ID（models.id）；不传则使用 ModelSettings.default_image_model_id；Provider 由模型关联反查
-     */
-    model_id?: (string | null);
+export type ShotFramePromptRenderRequest = {
     /**
      * first | last | key
      */
     frame_type: ShotFrameType;
     /**
-     * 提示词（由前端传入，创建任务接口必填）。
+     * 保留字段，当前渲染接口不使用；用于与前端调用参数保持一致。
      */
-    prompt: string;
+    model_id?: (string | null);
+    /**
+     * 可选提示词。为空时由后端基于分镜数据自动生成；非空时将参考图说明拼接后直接返回。
+     */
+    prompt?: (string | null);
     /**
      * 参考资产条目列表（可多张，顺序有效）。后端会使用 item.file_id 作为参考图；无效条目会被跳过。
      */
