@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter, Depends
-from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.task_manager import DeliveryMode, SqlAlchemyTaskStore, TaskManager
-from app.dependencies import get_db, get_nothinking_llm
+from app.dependencies import get_db
 from app.models.task_links import GenerationTaskLink
 from app.schemas.common import ApiResponse, created_response
 from app.services.film.shot_frame_prompt_tasks import (
     build_run_args as build_shot_frame_prompt_run_args,
     normalize_frame_type,
     relation_type_for_frame,
-    run_shot_frame_prompt_task,
 )
-from app.services.studio import mark_shot_generating
+from app.services.studio.shot_status import mark_shot_generating
+from app.tasks.execute_task import enqueue_task_execution
 
 from .common import (
     ShotFramePromptRequest,
@@ -33,7 +30,6 @@ router = APIRouter()
 )
 async def create_shot_frame_prompt_task(
     body: ShotFramePromptRequest,
-    llm: BaseChatModel = Depends(get_nothinking_llm),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[TaskCreated]:
     frame_type = normalize_frame_type(body.frame_type)
@@ -47,7 +43,12 @@ async def create_shot_frame_prompt_task(
         frame_type=frame_type,
     )
 
-    task_record = await tm.create(task=_CreateOnlyTask(), mode=DeliveryMode.async_polling, run_args=run_args)
+    task_record = await tm.create(
+        task=_CreateOnlyTask(),
+        mode=DeliveryMode.async_polling,
+        task_kind="shot_frame_prompt",
+        run_args=run_args,
+    )
     db.add(
         GenerationTaskLink(
             task_id=task_record.id,
@@ -59,5 +60,5 @@ async def create_shot_frame_prompt_task(
     await mark_shot_generating(db, shot_id=body.shot_id)
     await db.commit()
 
-    asyncio.create_task(run_shot_frame_prompt_task(task_id=task_record.id, run_args=run_args, llm=llm))
+    enqueue_task_execution(task_record.id)
     return created_response(TaskCreated(task_id=task_record.id))

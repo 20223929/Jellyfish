@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -38,11 +39,6 @@ class _FakeDB:
 
 
 async def _async_noop(*_args, **_kwargs) -> None:
-    return None
-
-
-def _close_task_stub(coro):
-    coro.close()
     return None
 
 
@@ -118,7 +114,7 @@ def test_create_video_generation_task_returns_created_envelope(client: TestClien
 
     monkeypatch.setattr(route, "build_run_args", _fake_build_run_args)
     monkeypatch.setattr(route, "TaskManager", _FakeTaskManager)
-    monkeypatch.setattr(route.asyncio, "create_task", _close_task_stub)
+    monkeypatch.setattr(route, "enqueue_task_execution", lambda task_id: SimpleNamespace(id=f"celery-{task_id}"))
     monkeypatch.setattr(route, "mark_shot_generating", _async_noop)
     app.dependency_overrides[get_db] = _override_db(db)
     try:

@@ -16,6 +16,7 @@ from app.core.task_manager import (
     TaskManager,
 )
 from app.core.task_manager.types import BaseTask, TaskStatus
+from app.models.task_links import GenerationTaskLink, GenerationTaskLinkStatus
 
 
 class DummyTask(BaseTask):
@@ -75,6 +76,9 @@ async def test_inmemory_async_polling_strategy_updates_status_progress_and_resul
     assert view.progress == 100
     assert view.result == {"url": "x"}
     assert view.error == ""
+    assert view.started_at_ts is not None
+    assert view.finished_at_ts is not None
+    assert view.elapsed_ms is not None
 
 
 @pytest.mark.asyncio
@@ -134,6 +138,7 @@ async def test_sqlalchemy_store_create_and_get_status_view_sqlite_memory() -> No
         assert view.status == TaskStatus.pending
         assert view.progress == 0
 
+        await store.set_status(task.id, TaskStatus.running)
         await store.set_progress(task.id, 55)
         await store.set_result(task.id, {"url": "db"})
         await store.set_status(task.id, TaskStatus.succeeded)
@@ -142,6 +147,92 @@ async def test_sqlalchemy_store_create_and_get_status_view_sqlite_memory() -> No
         assert view2.status == TaskStatus.succeeded
         assert view2.progress == 55
         assert view2.result == {"url": "db"}
+        assert view2.started_at_ts is not None
+        assert view2.finished_at_ts is not None
+        assert view2.elapsed_ms is not None
 
     await engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_sqlalchemy_store_list_task_views_relation_filter_deduplicates_tasks() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    import app.models.task  # noqa: F401
+    import app.models.task_links  # noqa: F401
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with SessionLocal() as db:
+        store = SqlAlchemyTaskStore(db)
+
+        first = await store.create(
+            payload={"run_args": {"chapter_id": "chapter-1"}},
+            mode=DeliveryMode.async_polling,
+            task_kind="script_extract",
+        )
+        second = await store.create(
+            payload={"run_args": {"chapter_id": "chapter-2"}},
+            mode=DeliveryMode.async_polling,
+            task_kind="script_extract",
+        )
+        await store.set_status(first.id, TaskStatus.running)
+        await store.set_status(second.id, TaskStatus.running)
+
+        db.add_all(
+            [
+                GenerationTaskLink(
+                    task_id=first.id,
+                    resource_type="text",
+                    relation_type="chapter",
+                    relation_entity_id="chapter-1",
+                    status=GenerationTaskLinkStatus.todo,
+                ),
+                GenerationTaskLink(
+                    task_id=first.id,
+                    resource_type="text",
+                    relation_type="chapter",
+                    relation_entity_id="chapter-1-draft",
+                    status=GenerationTaskLinkStatus.todo,
+                ),
+                GenerationTaskLink(
+                    task_id=second.id,
+                    resource_type="text",
+                    relation_type="chapter",
+                    relation_entity_id="chapter-2",
+                    status=GenerationTaskLinkStatus.todo,
+                ),
+            ]
+        )
+        await db.flush()
+
+        items, total = await store.list_task_views(
+            relation_type="chapter",
+            page=1,
+            page_size=20,
+        )
+
+        assert total == 2
+        assert len(items) == 2
+        assert {item.id for item in items} == {first.id, second.id}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_request_cancel_keeps_running_task_pending_cancellation() -> None:
+    store = InMemoryTaskStore()
+    tm = TaskManager(store=store, strategies={})
+
+    task = await tm.create(task=DummyTask(), mode=DeliveryMode.async_polling, run_args={"a": 1})
+    await store.set_status(task.id, TaskStatus.running)
+
+    rec = await tm.request_cancel(task_id=task.id, reason="用户取消")
+    assert rec.cancel_requested is True
+    assert rec.status == TaskStatus.running
+
+    view = await tm.get_status(task_id=task.id)
+    assert view.cancel_requested is True
+    assert view.status == TaskStatus.running

@@ -7,6 +7,14 @@
  */
 export type EntityMergerRequest = {
     /**
+     * 项目 ID（异步任务关联可选）
+     */
+    project_id?: (string | null);
+    /**
+     * 章节 ID（异步任务关联可选）
+     */
+    chapter_id?: (string | null);
+    /**
      * 所有镜头提取结果（ShotElementExtractionResult 的序列化形式）
      */
     all_shot_extractions: Array<Record<string, any>>;

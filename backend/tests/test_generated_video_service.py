@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -27,6 +29,7 @@ from app.services.film.generated_video import (
     resolve_default_video_model,
     validate_images_count,
 )
+from app.services.studio import get_shot_video_readiness
 
 
 async def _build_session() -> tuple[AsyncSession, object]:
@@ -116,7 +119,8 @@ async def test_preview_prompt_and_images_uses_auto_frame_ids() -> None:
             prompt=None,
         )
 
-        assert prompt == "首帧提示词\n尾帧提示词"
+        assert "镜头标题：镜头一" in prompt
+        assert "剧本摘录：角色推门而入。" in prompt
         assert images == ["f1", "f2"]
         assert detail.duration == 6
     await engine.dispose()
@@ -157,4 +161,82 @@ async def test_build_run_args_maps_reference_images(monkeypatch: pytest.MonkeyPa
         assert run_args["input"]["last_frame_base64"] == "data:image/png;base64,img-last"
         assert run_args["input"]["key_frame_base64"] is None
         assert run_args["input"]["seconds"] == 6
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_build_run_args_uses_prompt_pack_when_prompt_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    db, engine = await _build_session()
+    async with db:
+        await _seed_shot_graph(db)
+        provider = Provider(id="p1", name="OpenAI", base_url="https://api.openai.com/v1", api_key="k")
+        model = Model(id="m_video", name="sora-mini", category=ModelCategoryKey.video, provider_id="p1")
+        settings = ModelSettings(id=1, default_video_model_id="m_video")
+        db.add_all([provider, model, settings])
+        await db.commit()
+
+        async def _fake_file_id_to_data_url(_db: AsyncSession, *, file_id: str) -> str:
+            return f"data:image/png;base64,{file_id}"
+
+        monkeypatch.setattr(
+            "app.services.film.generated_video.file_id_to_data_url",
+            _fake_file_id_to_data_url,
+        )
+
+        run_args = await build_run_args(
+            db,
+            shot_id="s1",
+            reference_mode="text_only",
+            prompt=None,
+            images=[],
+            size=None,
+        )
+
+        assert "镜头标题：镜头一" in run_args["input"]["prompt"]
+        assert run_args["prompt_preview"]["shot_id"] == "s1"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shot_video_readiness_reports_ready_for_text_only() -> None:
+    db, engine = await _build_session()
+    async with db:
+        await _seed_shot_graph(db)
+        shot = await db.get(Shot, "s1")
+        assert shot is not None
+        shot.last_extracted_at = datetime.now(timezone.utc)
+        provider = Provider(id="p1", name="OpenAI", base_url="https://api.openai.com/v1", api_key="k")
+        model = Model(id="m_video", name="sora-mini", category=ModelCategoryKey.video, provider_id="p1")
+        settings = ModelSettings(id=1, default_video_model_id="m_video")
+        db.add_all([provider, model, settings])
+        await db.flush()
+
+        readiness = await get_shot_video_readiness(db, shot_id="s1", reference_mode="text_only")
+
+        assert readiness.ready is True
+        assert {item.key: item.ok for item in readiness.checks}["extraction_ready"] is True
+        assert {item.key: item.ok for item in readiness.checks}["reference_frames_ready"] is True
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shot_video_readiness_reports_missing_reference_frame() -> None:
+    db, engine = await _build_session()
+    async with db:
+        await _seed_shot_graph(db)
+        shot = await db.get(Shot, "s1")
+        assert shot is not None
+        shot.last_extracted_at = datetime.now(timezone.utc)
+        provider = Provider(id="p1", name="OpenAI", base_url="https://api.openai.com/v1", api_key="k")
+        model = Model(id="m_video", name="sora-mini", category=ModelCategoryKey.video, provider_id="p1")
+        settings = ModelSettings(id=1, default_video_model_id="m_video")
+        db.add_all([provider, model, settings])
+        await db.flush()
+
+        readiness = await get_shot_video_readiness(db, shot_id="s1", reference_mode="first")
+
+        checks = {item.key: item for item in readiness.checks}
+        assert readiness.ready is False
+        assert checks["reference_frames_ready"].ok is False
+        assert "first" in checks["reference_frames_ready"].message
     await engine.dispose()

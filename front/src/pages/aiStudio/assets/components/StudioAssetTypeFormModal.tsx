@@ -30,6 +30,31 @@ function clampViewCount(value: number | null): number | null {
   return Math.max(0, Math.min(4, Math.trunc(value)))
 }
 
+function notifyShotAssetCreatedAndLinked(payload: {
+  projectId?: string
+  chapterId?: string
+  shotId?: string
+  assetId?: string
+  assetName: string
+}) {
+  if (!payload.projectId || !payload.chapterId || !payload.shotId) return
+  try {
+    window.opener?.postMessage(
+      {
+        type: 'studio-shot-asset-created-and-linked',
+        projectId: payload.projectId,
+        chapterId: payload.chapterId,
+        shotId: payload.shotId,
+        assetId: payload.assetId ?? null,
+        assetName: payload.assetName,
+      },
+      window.location.origin,
+    )
+  } catch {
+    // 跨窗口通知失败不阻塞创建成功。
+  }
+}
+
 type AssetMutationPayload = Record<string, unknown> & {
   name: string
   description?: string
@@ -153,7 +178,7 @@ export function StudioAssetTypeFormModal({
         onCancel()
         await onSaved({ type: 'update', id: editing.id, asset: normalizedNext })
       } else {
-        await createAsset({
+        const created = await createAsset({
           id: `asset_${Date.now()}`,
           name: formName.trim(),
           description: formDesc.trim(),
@@ -165,6 +190,13 @@ export function StudioAssetTypeFormModal({
           ...(linkProjectId && linkChapterId ? { chapter_id: linkChapterId } : {}),
           ...(linkProjectId && linkShotId ? { shot_id: linkShotId } : {}),
           ...(nextViewCount === null ? {} : { view_count: nextViewCount }),
+        })
+        notifyShotAssetCreatedAndLinked({
+          projectId: linkProjectId,
+          chapterId: linkChapterId,
+          shotId: linkShotId,
+          assetId: created.id,
+          assetName: formName.trim(),
         })
         message.success('已创建')
         onCancel()

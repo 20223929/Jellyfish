@@ -56,6 +56,14 @@ class ShotCandidateStatus(str, Enum):
     ignored = "ignored"
 
 
+class ShotDialogueCandidateStatus(str, Enum):
+    """镜头对白提取候选确认状态。"""
+
+    pending = "pending"
+    accepted = "accepted"
+    ignored = "ignored"
+
+
 class CameraShotType(str, Enum):
     """景别（与 `app.schemas.skills.common.ShotType` 对齐，存英文 code）。"""
 

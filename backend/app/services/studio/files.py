@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,20 +43,19 @@ def _build_display_name(filename: str, name: str | None) -> str:
 
 def _resolve_download_media_type(filename: str) -> str:
     ext = Path(filename).suffix.lower()
-    if ext in {".jpg", ".jpeg"}:
-        return "image/jpeg"
-    if ext == ".png":
-        return "image/png"
-    if ext == ".webp":
-        return "image/webp"
-    if ext == ".gif":
-        return "image/gif"
-    if ext == ".mp4":
-        return "video/mp4"
-    if ext == ".mov":
-        return "video/quicktime"
+    media_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+    }
+    if ext in media_types:
+        return media_types[ext]
     if ext in {".mkv", ".avi", ".webm"}:
-        return "video/" + ext.lstrip(".")
+        return f"video/{ext.lstrip('.')}"
     return "application/octet-stream"
 
 

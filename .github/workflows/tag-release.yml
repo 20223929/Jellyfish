@@ -1,0 +1,56 @@
+name: Create Release From Tag
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract release metadata
+        id: meta
+        run: |
+          commit_subject="$(git log -1 --pretty=%s "$GITHUB_SHA")"
+          previous_tag="$(git tag --sort=-creatordate | grep -Fxv "$GITHUB_REF_NAME" | head -n 1 || true)"
+          if [ -n "$previous_tag" ]; then
+            commit_list="$(git log --format='- %s' "${previous_tag}..${GITHUB_REF_NAME}")"
+          else
+            commit_list="$(git log --format='- %s' "$GITHUB_REF_NAME")"
+          fi
+          if [ -z "$commit_list" ]; then
+            commit_list="- ${commit_subject}"
+          fi
+          {
+            echo "commit_subject<<EOF"
+            echo "$commit_subject"
+            echo "EOF"
+            echo "commit_list<<EOF"
+            echo "$commit_list"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          append_body: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## ${{ github.ref_name }} 发布说明
+
+            ${{ steps.meta.outputs.commit_subject }}
+
+            ## 具体变动
+
+            ${{ steps.meta.outputs.commit_list }}

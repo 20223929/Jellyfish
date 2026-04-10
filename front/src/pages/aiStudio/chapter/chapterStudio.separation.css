@@ -192,10 +192,6 @@
 .cs-dot.cs-pending {
   background: var(--cs-muted);
 }
-.cs-dot.cs-generating {
-  background: var(--cs-warn);
-  animation-duration: 1.1s;
-}
 @keyframes cs-breathe {
   0%, 100% { transform: scale(0.88); opacity: 0.75; }
   50% { transform: scale(1.12); opacity: 1; }

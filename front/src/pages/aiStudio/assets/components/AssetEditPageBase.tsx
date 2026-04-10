@@ -16,13 +16,28 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ArrowLeftOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, CloseCircleOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons'
 import { FilmService, ScriptProcessingService } from '../../../../services/generated'
 import type { TaskStatus } from '../../../../services/generated'
 import { listTaskLinksNormalized } from '../../../../services/filmTaskLinks'
 import { buildFileDownloadUrl } from '../utils'
 import { DisplayImageCard } from './DisplayImageCard'
 import { PROJECT_STYLE_OPTIONS_BY_VISUAL, ProjectVisualStyleAndStyleFields } from '../../project/ProjectVisualStyleAndStyleFields'
+import { defaultTaskActionErrorMessage, executeAsyncTaskCreate, executeTaskCancel, notifyExistingTask } from '../../components/taskActionHelpers'
+import { handleTaskResultSafely } from '../../components/taskResultHelpers'
+import { useRelationTaskNotification } from '../../components/taskNotificationHelpers'
+import { useTaskPageContext } from '../../components/taskPageContext'
+import { TASK_COPY } from '../../components/taskCopy'
+import { useLocation } from 'react-router-dom'
+import {
+  CHARACTER_PORTRAIT_ANALYSIS_RELATION_TYPE,
+  COSTUME_INFO_ANALYSIS_RELATION_TYPE,
+  PROP_INFO_ANALYSIS_RELATION_TYPE,
+  SCENE_INFO_ANALYSIS_RELATION_TYPE,
+  type RelationTaskState,
+  toRelationTaskStateFromStatusRead,
+  useCancelableRelationTask,
+} from '../../project/ProjectWorkbench/chapterDivisionTasks'
 
 const MAX_VIEW_COUNT = 4
 // 与后端 `AssetViewAngle`（backend/app/models/studio.py）一致的枚举值
@@ -122,6 +137,23 @@ function isTerminalStatus(status: TaskStatus): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'cancelled'
 }
 
+function getSmartDetectRelationType(relationType: string): string | null {
+  if (relationType === 'actor_image' || relationType === 'character_image') return CHARACTER_PORTRAIT_ANALYSIS_RELATION_TYPE
+  if (relationType === 'scene_image') return SCENE_INFO_ANALYSIS_RELATION_TYPE
+  if (relationType === 'prop_image') return PROP_INFO_ANALYSIS_RELATION_TYPE
+  if (relationType === 'costume_image') return COSTUME_INFO_ANALYSIS_RELATION_TYPE
+  return null
+}
+
+function getAssetNavigateRelationType(relationType: string): string | null {
+  if (relationType === 'actor_image') return 'actor'
+  if (relationType === 'character_image') return 'character'
+  if (relationType === 'scene_image') return 'scene'
+  if (relationType === 'prop_image') return 'prop'
+  if (relationType === 'costume_image') return 'costume'
+  return null
+}
+
 export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseAssetImage>({
   assetId,
   missingAssetIdText,
@@ -137,6 +169,8 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
   createGenerationTask,
   onNavigate,
 }: AssetEditPageBaseProps<TAsset, TImage>) {
+  const taskCopy = TASK_COPY.smartDetect
+  const location = useLocation()
   const [loading, setLoading] = useState(true)
   const [asset, setAsset] = useState<TAsset | null>(null)
   const [images, setImages] = useState<TImage[]>([])
@@ -155,6 +189,8 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
   const [smartDetectOptimizedDesc, setSmartDetectOptimizedDesc] = useState('')
 
   const [generatingByImageId, setGeneratingByImageId] = useState<Record<number, boolean>>({})
+  const [generationTask, setGenerationTask] = useState<RelationTaskState | null>(null)
+  const [generationSettledTask, setGenerationSettledTask] = useState<RelationTaskState | null>(null)
 
   const [promptPreviewOpen, setPromptPreviewOpen] = useState(false)
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false)
@@ -167,6 +203,62 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
   const [historyCandidates, setHistoryCandidates] = useState<HistoryCandidate<TImage>[]>([])
   const [editingSlotImage, setEditingSlotImage] = useState<TImage | null>(null)
   const [adoptingImageId, setAdoptingImageId] = useState<string | null>(null)
+  const smartDetectRelationType = useMemo(() => getSmartDetectRelationType(relationType), [relationType])
+  const smartDetectRelationEntityId = useMemo(
+    () => (assetId && smartDetectRelationType ? `${relationType}:${assetId}` : null),
+    [assetId, relationType, smartDetectRelationType],
+  )
+  const assetNavigateRelationType = useMemo(
+    () => getAssetNavigateRelationType(relationType),
+    [relationType],
+  )
+  const applySmartDetectResult = useCallback(async (taskId: string) => {
+    await handleTaskResultSafely(taskId, {
+      readErrorMessage: '读取智能检测结果失败',
+      failedFallbackMessage: '智能检测失败',
+      onSucceeded: (resultValue) => {
+        const result = resultValue as Record<string, any>
+        const issues = Array.isArray(result.issues)
+          ? result.issues.filter((it: unknown): it is string => typeof it === 'string' && it.trim().length > 0)
+          : []
+        const optimizedDesc = String(result.optimized_description ?? '').trim()
+        setSmartDetectIssues(issues)
+        setSmartDetectOptimizedDesc(optimizedDesc)
+        setSmartDetectOpen(true)
+        if (issues.length > 0) message.warning(`发现 ${issues.length} 项可能缺失信息`)
+        else message.success('未发现缺失信息')
+      },
+      onFailed: (errorMessage) => {
+        message.error(errorMessage)
+      },
+      onReadError: () => {
+        message.error('读取智能检测结果失败')
+      },
+    })
+  }, [])
+  const { task: smartDetectTask, settledTask: smartDetectSettledTask, trackTaskData: trackSmartDetectTaskData, applyCancelData: applySmartDetectCancelData } = useCancelableRelationTask({
+    enabled: !!assetId && !!smartDetectRelationType && !!smartDetectRelationEntityId,
+    relationType: smartDetectRelationType || '',
+    relationEntityId: smartDetectRelationEntityId,
+    onTaskSettled: applySmartDetectResult,
+  })
+  useTaskPageContext(
+    [
+      smartDetectRelationType && smartDetectRelationEntityId
+        ? {
+            relationType: smartDetectRelationType,
+            relationEntityId: smartDetectRelationEntityId,
+          }
+        : null,
+      assetNavigateRelationType && assetId
+        ? {
+            relationType: assetNavigateRelationType,
+            relationEntityId: assetId,
+          }
+        : null,
+    ],
+  )
+  const smartDetectBusy = smartDetectLoading || !!smartDetectTask
 
   const ensureImageSlots = useCallback(async (targetViewCount: number) => {
     if (!assetId) return []
@@ -285,6 +377,7 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
 
   const handleSmartDetectMissing = async () => {
     if (!assetId) return
+    if (!smartDetectRelationEntityId) return
 
     const description = (formDesc || '').trim()
     if (!description) {
@@ -295,74 +388,143 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
       return
     }
 
+    if (notifyExistingTask(smartDetectTask, {
+      cancellingMessage: taskCopy.cancellingMessage,
+      runningMessage: taskCopy.runningMessage,
+    })) {
+      return
+    }
+
     setSmartDetectLoading(true)
     try {
-      let res: any = null
-
-      if (relationType === 'actor_image') {
-        const character_context = asset?.name ? `角色名：${formName}\n演员标签：${formTags}` : `演员标签：${formTags}`
-        res = await ScriptProcessingService.analyzeCharacterPortraitApiV1ScriptProcessingAnalyzeCharacterPortraitPost({
-          requestBody: {
-            character_description: description,
-            character_context: (character_context || '').trim() || null,
-          },
-        })
-      } else if (relationType === 'scene_image') {
-        const scene_context = asset?.name ? `场景名：${formName}\n标签：${formTags}` : `标签：${formTags}`
-        res = await ScriptProcessingService.analyzeSceneInfoApiV1ScriptProcessingAnalyzeSceneInfoPost({
-          requestBody: {
-            scene_description: description,
-            scene_context: (scene_context || '').trim() || null,
-          },
-        })
-      } else if (relationType === 'prop_image') {
-        const prop_context = asset?.name ? `道具名：${formName}\n标签：${formTags}` : `标签：${formTags}`
-        res = await ScriptProcessingService.analyzePropInfoApiV1ScriptProcessingAnalyzePropInfoPost({
-          requestBody: {
-            prop_description: description,
-            prop_context: (prop_context || '').trim() || null,
-          },
-        })
-      } else if (relationType === 'costume_image') {
+      const request = () => {
+        if (relationType === 'actor_image') {
+          const character_context = asset?.name ? `角色名：${formName}\n演员标签：${formTags}` : `演员标签：${formTags}`
+          return ScriptProcessingService.analyzeCharacterPortraitAsyncApiV1ScriptProcessingAnalyzeCharacterPortraitAsyncPost({
+            requestBody: {
+              relation_entity_id: smartDetectRelationEntityId,
+              character_description: description,
+              character_context: (character_context || '').trim() || null,
+            },
+          })
+        }
+        if (relationType === 'scene_image') {
+          const scene_context = asset?.name ? `场景名：${formName}\n标签：${formTags}` : `标签：${formTags}`
+          return ScriptProcessingService.analyzeSceneInfoAsyncApiV1ScriptProcessingAnalyzeSceneInfoAsyncPost({
+            requestBody: {
+              relation_entity_id: smartDetectRelationEntityId,
+              scene_description: description,
+              scene_context: (scene_context || '').trim() || null,
+            },
+          })
+        }
+        if (relationType === 'prop_image') {
+          const prop_context = asset?.name ? `道具名：${formName}\n标签：${formTags}` : `标签：${formTags}`
+          return ScriptProcessingService.analyzePropInfoAsyncApiV1ScriptProcessingAnalyzePropInfoAsyncPost({
+            requestBody: {
+              relation_entity_id: smartDetectRelationEntityId,
+              prop_description: description,
+              prop_context: (prop_context || '').trim() || null,
+            },
+          })
+        }
         const costume_context = asset?.name ? `服装名：${formName}\n标签：${formTags}` : `标签：${formTags}`
-        res = await ScriptProcessingService.analyzeCostumeInfoApiV1ScriptProcessingAnalyzeCostumeInfoPost({
+        return ScriptProcessingService.analyzeCostumeInfoAsyncApiV1ScriptProcessingAnalyzeCostumeInfoAsyncPost({
           requestBody: {
+            relation_entity_id: smartDetectRelationEntityId,
             costume_description: description,
             costume_context: (costume_context || '').trim() || null,
           },
         })
-      } else {
-        return
       }
 
-      const data = res?.data
-      if (!data) {
-        message.error(res?.message || '智能检测失败')
-        return
-      }
-
-      const issues = Array.isArray(data.issues)
-        ? data.issues.filter((it: unknown): it is string => typeof it === 'string' && it.trim().length > 0)
-        : []
-      const optimizedDesc = (data.optimized_description ?? '').trim()
-
-      setSmartDetectIssues(issues)
-      setSmartDetectOptimizedDesc(optimizedDesc)
-      setSmartDetectOpen(true)
-
-      if (issues.length > 0) message.warning(`发现 ${issues.length} 项可能缺失信息`)
-      else message.success('未发现缺失信息')
-    } catch (e: any) {
-      const status = e?.response?.status ?? e?.status
-      if (status === 404) {
-        message.warning('接口未找到：请运行 `pnpm run openapi:update` 生成客户端代码后重试')
-      } else {
-        message.error(e?.message || '智能检测失败')
-      }
+      await executeAsyncTaskCreate({
+        request,
+        trackTaskData: trackSmartDetectTaskData,
+        startedMessage: taskCopy.startedMessage,
+        reusedMessage: taskCopy.reusedMessage,
+        fallbackErrorMessage: '智能检测失败',
+        getErrorMessage: (error, fallbackMessage) => {
+          const maybeAny = error as { response?: { status?: number }; status?: number }
+          const status = maybeAny?.response?.status ?? maybeAny?.status
+          if (status === 404) {
+            return '接口未找到：请运行 `pnpm run openapi:update` 生成客户端代码后重试'
+          }
+          return defaultTaskActionErrorMessage(error, fallbackMessage)
+        },
+      })
+    } catch {
+      // executeAsyncTaskCreate 已统一处理错误提示
     } finally {
       setSmartDetectLoading(false)
     }
   }
+
+  const handleCancelSmartDetectTask = async () => {
+    if (!smartDetectTask?.taskId) return
+    try {
+      await executeTaskCancel({
+        taskId: smartDetectTask.taskId,
+        reason: `用户在${assetDisplayName}资产编辑页取消智能检测任务`,
+        applyCancelData: applySmartDetectCancelData,
+        cancelledImmediatelyMessage: taskCopy.cancelledImmediatelyMessage,
+        cancelRequestedMessage: taskCopy.cancelRequestedMessage,
+        fallbackErrorMessage: '取消智能检测任务失败',
+      })
+    } catch {
+      // executeTaskCancel 已统一处理错误提示
+    }
+  }
+
+  useRelationTaskNotification({
+    task: smartDetectTask,
+    settledTask: smartDetectSettledTask,
+    title: taskCopy.title,
+    sourceLabel: formName?.trim() ? `${assetDisplayName}：${formName.trim()}` : `${assetDisplayName}编辑页`,
+    runningDescription: taskCopy.runningDescription,
+    cancellingDescription: taskCopy.cancellingDescription,
+    successDescription: taskCopy.successDescription,
+    cancelledDescription: taskCopy.cancelledDescription,
+    failedDescription: taskCopy.failedDescription,
+    onCancel: smartDetectTask ? () => void handleCancelSmartDetectTask() : null,
+    onNavigate: () => onNavigate(location.pathname),
+  })
+  useRelationTaskNotification({
+    task: generationTask,
+    settledTask: generationSettledTask,
+    title: TASK_COPY.imageGeneration.title,
+    sourceLabel: formName?.trim() ? `${assetDisplayName}：${formName.trim()}` : `${assetDisplayName}编辑页`,
+    runningDescription: TASK_COPY.imageGeneration.runningDescription,
+    cancellingDescription: TASK_COPY.imageGeneration.cancellingDescription,
+    successDescription: TASK_COPY.imageGeneration.successDescription,
+    cancelledDescription: TASK_COPY.imageGeneration.cancelledDescription,
+    failedDescription: TASK_COPY.imageGeneration.failedDescription,
+    onCancel:
+      generationTask?.taskId
+        ? () =>
+            void executeTaskCancel({
+              taskId: generationTask.taskId,
+              reason: `用户在${assetDisplayName}资产编辑页取消图片生成任务`,
+              applyCancelData: (data) => {
+                setGenerationTask((current) =>
+                  current
+                    ? {
+                        ...current,
+                        taskId: data?.task_id || current.taskId,
+                        status: (data?.status ?? current.status) as TaskStatus,
+                        cancelRequested: data?.cancel_requested ?? true,
+                      }
+                    : current,
+                )
+                return null
+              },
+              cancelledImmediatelyMessage: TASK_COPY.imageGeneration.cancelledImmediatelyMessage,
+              cancelRequestedMessage: TASK_COPY.imageGeneration.cancelRequestedMessage,
+              fallbackErrorMessage: '取消图片生成任务失败',
+            })
+        : null,
+    onNavigate: () => onNavigate(location.pathname),
+  })
 
   const openPromptPreview = async (image: TImage) => {
     if (!assetId) return
@@ -399,25 +561,38 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
         message.error('生成任务创建失败：缺少任务 ID')
         return
       }
+      setGenerationTask({
+        taskId,
+        status: 'pending',
+        progress: 0,
+        cancelRequested: false,
+      })
+      setGenerationSettledTask(null)
 
       let finalStatus: TaskStatus = 'pending'
+      let finalTaskState: RelationTaskState | null = null
       for (let i = 0; i < 30; i += 1) {
         await sleep(2000)
         const statusRes = await FilmService.getTaskStatusApiV1FilmTasksTaskIdStatusGet({ taskId })
         const status = statusRes.data?.status
         if (!status) continue
         finalStatus = status
+        if (statusRes.data) {
+          finalTaskState = toRelationTaskStateFromStatusRead(statusRes.data)
+          setGenerationTask(finalTaskState)
+        }
         if (isTerminalStatus(status)) break
+      }
+      if (finalTaskState && isTerminalStatus(finalTaskState.status)) {
+        setGenerationTask(null)
+        setGenerationSettledTask(finalTaskState)
       }
 
       if (finalStatus === 'succeeded') {
-        message.success('生成完成')
         setPromptPreviewOpen(false)
         setPromptPreviewImage(null)
         await loadData()
-      } else if (finalStatus === 'failed' || finalStatus === 'cancelled') {
-        message.error('生成任务失败')
-      } else {
+      } else if (finalStatus !== 'failed' && finalStatus !== 'cancelled') {
         message.warning('生成任务仍在执行，请稍后刷新')
       }
     } catch {
@@ -553,7 +728,7 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
               <div className="space-y-3">
                 <div>
                   <div className="text-gray-600 text-sm mb-1">名称</div>
-                  <Input value={formName} onChange={(e) => setFormName(e.target.value)} disabled={smartDetectLoading || savingBase} />
+                  <Input value={formName} onChange={(e) => setFormName(e.target.value)} disabled={smartDetectBusy || savingBase} />
                 </div>
                 <div>
                     <div className="flex items-center justify-between gap-2 mb-1">
@@ -562,27 +737,40 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
                       relationType === 'scene_image' ||
                       relationType === 'prop_image' ||
                       relationType === 'costume_image' ? (
-                        <Button
-                          type="primary"
-                          size="small"
-                          onClick={() => void handleSmartDetectMissing()}
-                          loading={smartDetectLoading}
-                          disabled={Boolean(loading)}
-                        >
-                          智能检测
-                        </Button>
+                        <>
+                          <Button
+                            type="primary"
+                            size="small"
+                            onClick={() => void handleSmartDetectMissing()}
+                            loading={smartDetectLoading}
+                            disabled={Boolean(loading) || !!smartDetectTask}
+                          >
+                            {smartDetectTask ? '检测中' : '智能检测'}
+                          </Button>
+                          {smartDetectTask ? (
+                            <Button
+                              size="small"
+                              danger
+                              icon={<CloseCircleOutlined />}
+                              disabled={smartDetectTask.cancelRequested}
+                              onClick={() => void handleCancelSmartDetectTask()}
+                            >
+                              {smartDetectTask.cancelRequested ? '正在取消' : '取消检测'}
+                            </Button>
+                          ) : null}
+                        </>
                       ) : null}
                     </div>
                   <Input.TextArea
                     rows={4}
                     value={formDesc}
                     onChange={(e) => setFormDesc(e.target.value)}
-                    disabled={smartDetectLoading || savingBase}
+                    disabled={smartDetectBusy || savingBase}
                   />
                 </div>
                 <div>
                   <div className="text-gray-600 text-sm mb-1">标签（逗号分隔）</div>
-                  <Input value={formTags} onChange={(e) => setFormTags(e.target.value)} disabled={smartDetectLoading || savingBase} />
+                  <Input value={formTags} onChange={(e) => setFormTags(e.target.value)} disabled={smartDetectBusy || savingBase} />
                 </div>
                 <div>
                   <div className="text-gray-600 text-sm mb-1">镜头数（仅可增加，最大 4）</div>
@@ -592,13 +780,13 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
                     precision={0}
                     value={formViewCount}
                     onChange={(v) => setFormViewCount(v ?? minViewCount)}
-                    disabled={smartDetectLoading || savingBase}
+                    disabled={smartDetectBusy || savingBase}
                   />
                 </div>
                 <div>
                   <div className="text-gray-600 text-sm mb-1">视觉风格</div>
                   <ProjectVisualStyleAndStyleFields
-                    disabled={smartDetectLoading || savingBase}
+                    disabled={smartDetectBusy || savingBase}
                     visual_style={formVisualStyle}
                     style={formStyle}
                     onChange={(next) => {
@@ -818,4 +1006,3 @@ export function AssetEditPageBase<TAsset extends BaseAsset, TImage extends BaseA
     </div>
   )
 }
-

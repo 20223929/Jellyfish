@@ -11,17 +11,19 @@ from app.models.studio import (
     Prop,
     ProjectStyle,
     ProjectVisualStyle,
+    PromptCategory,
+    PromptTemplate,
     Scene,
     Shot,
     ShotDetail,
     ShotCandidateStatus,
     ShotCandidateType,
+    ShotDialogueCandidateStatus,
     ShotDialogLine,
     ShotExtractedCandidate,
+    ShotExtractedDialogueCandidate,
     ShotStatus,
 )
-from app.models.task import GenerationDeliveryMode, GenerationTask, GenerationTaskStatus
-from app.models.task_links import GenerationTaskLink
 from app.schemas.skills.script_processing import StudioScriptExtractionDraft, StudioShotDraft
 from app.services.studio import (
     create_project_asset_link,
@@ -29,13 +31,25 @@ from app.services.studio import (
     get_shot_assets_overview,
     ignore_shot_extracted_candidate,
     link_shot_extracted_candidate,
+    accept_shot_extracted_dialogue_candidate,
+    ignore_shot_extracted_dialogue_candidate,
     list_shot_extracted_candidates,
+    list_shot_extracted_dialogue_candidates,
     replace_shot_extracted_candidates,
+    replace_shot_extracted_dialogue_candidates,
     set_skip_extraction,
     sync_shot_extracted_candidates_from_draft,
+    sync_shot_extracted_dialogue_candidates_from_draft,
+    render_shot_video_prompt_preview,
 )
+from app.services.studio.shots import build_shot_read
 from app.services.studio.shot_details import update as update_shot_detail
-from app.schemas.studio.shots import ProjectAssetLinkCreate, ShotDetailUpdate
+from app.services.studio.shot_dialogs import delete as delete_shot_dialog
+from app.schemas.studio.shots import (
+    ProjectAssetLinkCreate,
+    ShotDetailUpdate,
+    ShotExtractedDialogueCandidateAcceptRequest,
+)
 from app.services.studio import mark_shot_generating, recompute_shot_status
 
 
@@ -70,6 +84,28 @@ async def test_recompute_shot_status_keeps_pending_without_candidates() -> None:
         status = await recompute_shot_status(db, shot_id=shot.id)
         assert status == ShotStatus.pending
         assert shot.status == ShotStatus.pending
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_build_shot_read_distinguishes_not_extracted_and_extracted_empty() -> None:
+    db, engine = await _build_session()
+    async with db:
+        shot = await _seed_graph(db)
+
+        initial = await build_shot_read(db, shot=shot)
+        assert initial.extraction.state == "not_extracted"
+        assert initial.extraction.has_extracted is False
+
+        await replace_shot_extracted_candidates(db, shot_id=shot.id, candidates=[])
+        await replace_shot_extracted_dialogue_candidates(db, shot_id=shot.id, candidates=[])
+
+        refreshed = await build_shot_read(db, shot=shot)
+        assert refreshed.extraction.state == "extracted_empty"
+        assert refreshed.extraction.has_extracted is True
+        assert refreshed.last_extracted_at is not None
+        assert refreshed.extraction.asset_candidate_total == 0
+        assert refreshed.extraction.dialogue_candidate_total == 0
     await engine.dispose()
 
 
@@ -139,6 +175,111 @@ async def test_shot_ready_does_not_depend_on_dialog_lines() -> None:
         assert status == ShotStatus.ready
         assert shot.status == ShotStatus.ready
         assert len(dialog_rows) == 0
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dialogue_candidate_blocks_ready_until_accepted() -> None:
+    db, engine = await _build_session()
+    async with db:
+        shot = await _seed_graph(db)
+        db.add(
+            ShotDetail(
+                id=shot.id,
+                camera_shot="MS",
+                angle="EYE_LEVEL",
+                movement="STATIC",
+                duration=3,
+            )
+        )
+        await db.flush()
+
+        rows = await replace_shot_extracted_dialogue_candidates(
+            db,
+            shot_id=shot.id,
+            candidates=[{"index": 1, "text": "你是谁？", "speaker_name": "男子"}],
+        )
+
+        assert len(rows) == 1
+        assert shot.status == ShotStatus.pending
+
+        row = await accept_shot_extracted_dialogue_candidate(
+            db,
+            candidate_id=rows[0].id,
+            body=ShotExtractedDialogueCandidateAcceptRequest(),
+        )
+        dialog_lines = (
+            await db.execute(select(ShotDialogLine).where(ShotDialogLine.shot_detail_id == shot.id))
+        ).scalars().all()
+
+        assert row.candidate_status == ShotDialogueCandidateStatus.accepted
+        assert row.linked_dialog_line_id == dialog_lines[0].id
+        assert dialog_lines[0].text == "你是谁？"
+        assert shot.status == ShotStatus.ready
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_render_shot_video_prompt_preview_uses_prompt_pack() -> None:
+    db, engine = await _build_session()
+    async with db:
+        shot = await _seed_graph(db)
+        db.add_all(
+            [
+                ShotDetail(
+                    id=shot.id,
+                    camera_shot="MS",
+                    angle="EYE_LEVEL",
+                    movement="STATIC",
+                    duration=3,
+                    atmosphere="温暖但紧张",
+                ),
+                ShotDialogLine(
+                    shot_detail_id=shot.id,
+                    index=1,
+                    text="你终于来了。",
+                    speaker_name="男子",
+                ),
+                PromptTemplate(
+                    id="video-template-1",
+                    category=PromptCategory.video_prompt,
+                    name="视频默认模板",
+                    content="标题：{{ shot_title }}\n对白：{{ dialogue_summary }}\n风格：{{ visual_style }}",
+                    preview="",
+                    variables=[],
+                    is_default=True,
+                    is_system=False,
+                ),
+            ]
+        )
+        await db.flush()
+
+        result = await render_shot_video_prompt_preview(db, shot_id=shot.id)
+
+        assert result.template_id == "video-template-1"
+        assert "镜头一" in result.rendered_prompt
+        assert "男子：你终于来了。" in result.rendered_prompt
+        assert "现实" in result.rendered_prompt
+        assert result.pack.camera.duration == 3
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dialogue_candidate_ignore_allows_ready() -> None:
+    db, engine = await _build_session()
+    async with db:
+        shot = await _seed_graph(db)
+        rows = await replace_shot_extracted_dialogue_candidates(
+            db,
+            shot_id=shot.id,
+            candidates=[{"index": 1, "text": "画外音", "line_mode": "VOICE_OVER"}],
+        )
+
+        assert shot.status == ShotStatus.pending
+        row = await ignore_shot_extracted_dialogue_candidate(db, candidate_id=rows[0].id)
+
+        assert row.candidate_status == ShotDialogueCandidateStatus.ignored
+        assert shot.status == ShotStatus.ready
     await engine.dispose()
 
 
@@ -254,6 +395,7 @@ async def test_sync_from_extraction_draft_marks_empty_extraction_as_ready() -> N
         )
 
         await sync_shot_extracted_candidates_from_draft(db, chapter_id="chapter-1", draft=draft)
+        await sync_shot_extracted_dialogue_candidates_from_draft(db, chapter_id="chapter-1", draft=draft)
 
         assert shot.last_extracted_at is not None
         assert shot.status == ShotStatus.ready
@@ -296,6 +438,7 @@ async def test_sync_from_extraction_draft_persists_candidate_description_in_payl
         )
 
         await sync_shot_extracted_candidates_from_draft(db, chapter_id="chapter-1", draft=draft)
+        await sync_shot_extracted_dialogue_candidates_from_draft(db, chapter_id="chapter-1", draft=draft)
         rows = await list_shot_extracted_candidates(db, shot_id=shot.id)
 
         assert len(rows) == 1
@@ -307,7 +450,53 @@ async def test_sync_from_extraction_draft_persists_candidate_description_in_payl
 
 
 @pytest.mark.asyncio
-async def test_recompute_shot_status_prefers_generating_when_active_task_exists() -> None:
+async def test_sync_from_extraction_draft_persists_dialogue_candidates() -> None:
+    db, engine = await _build_session()
+    async with db:
+        shot = await _seed_graph(db)
+        draft = StudioScriptExtractionDraft(
+            project_id="project-1",
+            chapter_id="chapter-1",
+            script_text="测试文本",
+            characters=[],
+            scenes=[],
+            props=[],
+            costumes=[],
+            shots=[
+                StudioShotDraft(
+                    index=1,
+                    title="镜头一",
+                    script_excerpt="摘录",
+                    scene_name=None,
+                    character_names=[],
+                    prop_names=[],
+                    costume_names=[],
+                    dialogue_lines=[
+                        {
+                            "index": 1,
+                            "text": "你终于来了。",
+                            "line_mode": "DIALOGUE",
+                            "speaker_name": "男子",
+                        }
+                    ],
+                    actions=[],
+                )
+            ],
+        )
+
+        await sync_shot_extracted_candidates_from_draft(db, chapter_id="chapter-1", draft=draft)
+        await sync_shot_extracted_dialogue_candidates_from_draft(db, chapter_id="chapter-1", draft=draft)
+        rows = await list_shot_extracted_dialogue_candidates(db, shot_id=shot.id)
+
+        assert len(rows) == 1
+        assert rows[0].text == "你终于来了。"
+        assert rows[0].candidate_status == ShotDialogueCandidateStatus.pending
+        assert shot.status == ShotStatus.pending
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mark_shot_generating_keeps_static_ready_status() -> None:
     db, engine = await _build_session()
     async with db:
         shot = await _seed_graph(db)
@@ -316,46 +505,54 @@ async def test_recompute_shot_status_prefers_generating_when_active_task_exists(
             shot_id=shot.id,
             candidates=[{"candidate_type": "character", "candidate_name": "仙女A"}],
         )
-        candidate = (
-            await db.get(ShotExtractedCandidate, 1)
-        )
+        candidate = await db.get(ShotExtractedCandidate, 1)
         assert candidate is not None
         candidate.candidate_status = ShotCandidateStatus.linked
-
-        db.add(
-            GenerationTask(
-                id="task-1",
-                mode=GenerationDeliveryMode.async_polling,
-                status=GenerationTaskStatus.running,
-                payload={},
-            )
-        )
-        db.add(
-            GenerationTaskLink(
-                task_id="task-1",
-                resource_type="video",
-                relation_type="shot_video",
-                relation_entity_id=shot.id,
-            )
-        )
         await db.flush()
 
-        status = await recompute_shot_status(db, shot_id=shot.id)
-
-        assert status == ShotStatus.generating
-        assert shot.status == ShotStatus.generating
+        status = await mark_shot_generating(db, shot_id=shot.id)
+        assert status == ShotStatus.ready
+        assert shot.status == ShotStatus.ready
     await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_mark_shot_generating_updates_status_directly() -> None:
+async def test_delete_dialog_line_marks_linked_dialogue_candidate_back_to_pending() -> None:
     db, engine = await _build_session()
     async with db:
         shot = await _seed_graph(db)
-        status = await mark_shot_generating(db, shot_id=shot.id)
-        assert status == ShotStatus.generating
-        assert shot.status == ShotStatus.generating
-    await engine.dispose()
+        db.add(
+            ShotDetail(
+                id=shot.id,
+                camera_shot="MS",
+                angle="EYE_LEVEL",
+                movement="STATIC",
+                duration=3,
+            )
+        )
+        await db.flush()
+
+        rows = await replace_shot_extracted_dialogue_candidates(
+            db,
+            shot_id=shot.id,
+            candidates=[{"index": 1, "text": "你终于来了。", "speaker_name": "男子"}],
+        )
+        accepted = await accept_shot_extracted_dialogue_candidate(
+            db,
+            candidate_id=rows[0].id,
+            body=ShotExtractedDialogueCandidateAcceptRequest(),
+        )
+        assert shot.status == ShotStatus.ready
+        assert accepted.linked_dialog_line_id is not None
+
+        await delete_shot_dialog(db, line_id=accepted.linked_dialog_line_id)
+
+        candidate = await db.get(ShotExtractedDialogueCandidate, accepted.id)
+        assert candidate is not None
+        assert candidate.candidate_status == ShotDialogueCandidateStatus.pending
+        assert candidate.linked_dialog_line_id is None
+        assert candidate.confirmed_at is None
+        assert shot.status == ShotStatus.pending
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import HTTPException
-from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,8 +14,11 @@ from app.core.db import async_session_maker
 from app.core.task_manager import SqlAlchemyTaskStore
 from app.core.task_manager.types import TaskStatus
 from app.models.studio import Chapter, Shot, ShotDetail
+from app.services.llm.runtime import build_default_text_llm_sync
 from app.services.common import entity_not_found, invalid_choice
-from app.services.studio import recompute_shot_status
+from app.services.studio.shot_status import recompute_shot_status
+from app.services.worker.async_task_support import cancel_if_requested_async
+from app.services.worker.task_logging import log_task_event, log_task_failure
 
 
 def normalize_frame_type(frame_type: str) -> str:
@@ -84,10 +86,8 @@ async def build_run_args(
 
 
 async def run_shot_frame_prompt_task(
-    *,
     task_id: str,
     run_args: dict,
-    llm: BaseChatModel,
 ) -> None:
     async with async_session_maker() as session:
         try:
@@ -95,10 +95,15 @@ async def run_shot_frame_prompt_task(
             await store.set_status(task_id, TaskStatus.running)
             await store.set_progress(task_id, 10)
             await session.commit()
+            log_task_event("shot_frame_prompt", task_id, "running")
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("shot_frame_prompt", task_id, "cancelled", stage="before_execute")
+                return
 
             frame_type = str(run_args.get("frame_type") or "")
             shot_id = str(run_args.get("shot_id") or "")
             input_dict = dict(run_args.get("input") or {})
+            llm = await session.run_sync(lambda sync_db: build_default_text_llm_sync(sync_db, thinking=False))
 
             if frame_type == "first":
                 agent = ShotFirstFramePromptAgent(llm)
@@ -107,6 +112,9 @@ async def run_shot_frame_prompt_task(
             else:
                 agent = ShotKeyFramePromptAgent(llm)
             result = await agent.aextract(**input_dict)
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("shot_frame_prompt", task_id, "cancelled", stage="after_execute")
+                return
 
             if not shot_id:
                 raise RuntimeError("Missing shot_id in run args")
@@ -122,10 +130,14 @@ async def run_shot_frame_prompt_task(
                 shot_detail.key_frame_prompt = result.prompt
 
             await store.set_result(task_id, result.model_dump())
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("shot_frame_prompt", task_id, "cancelled", stage="after_persist")
+                return
             await store.set_progress(task_id, 100)
             await store.set_status(task_id, TaskStatus.succeeded)
             await recompute_shot_status(session, shot_id=shot_id)
             await session.commit()
+            log_task_event("shot_frame_prompt", task_id, "succeeded")
         except Exception as exc:  # noqa: BLE001
             await session.rollback()
             async with async_session_maker() as s2:
@@ -136,3 +148,4 @@ async def run_shot_frame_prompt_task(
                 if shot_id:
                     await recompute_shot_status(s2, shot_id=shot_id)
                 await s2.commit()
+            log_task_failure("shot_frame_prompt", task_id, str(exc))

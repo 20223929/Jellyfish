@@ -19,7 +19,7 @@ export type ShotFrameImageTaskRequest = {
      */
     frame_type: ShotFrameType;
     /**
-     * 提示词（由前端传入，必填）。frame-render-prompt 与创建任务接口均使用该字段。
+     * 提示词（由前端传入，创建任务接口必填）。
      */
     prompt: string;
     /**

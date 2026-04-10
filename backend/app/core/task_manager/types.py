@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
+
 class TaskStatus(str, Enum):
     """任务状态枚举。"""
 
@@ -57,14 +58,24 @@ class TaskRecord:
 
     id: str
     mode: DeliveryMode
+    task_kind: str
     status: TaskStatus
     progress: int  # 0-100
     payload: dict[str, Any]
     result: Optional[dict[str, Any]] = None
     error: str = ""
+    cancel_requested: bool = False
+    cancel_requested_at_ts: Optional[float] = None
+    cancel_reason: str = ""
+    cancelled_at_ts: Optional[float] = None
+    started_at_ts: Optional[float] = None
+    finished_at_ts: Optional[float] = None
+    elapsed_ms: Optional[int] = None
 
     created_at_ts: Optional[float] = None
     updated_at_ts: Optional[float] = None
+    executor_type: Optional[str] = None
+    executor_task_id: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -76,5 +87,33 @@ class TaskStatusView:
     progress: int  # 0-100
     result: Optional[dict[str, Any]] = None
     error: str = ""
+    cancel_requested: bool = False
+    cancel_requested_at_ts: Optional[float] = None
+    started_at_ts: Optional[float] = None
+    finished_at_ts: Optional[float] = None
+    elapsed_ms: Optional[int] = None
     updated_at_ts: Optional[float] = None
 
+
+@dataclass(slots=True)
+class TaskListItemView:
+    """任务中心列表视图。"""
+
+    id: str
+    task_kind: str
+    status: TaskStatus
+    progress: int
+    cancel_requested: bool = False
+    cancel_requested_at_ts: Optional[float] = None
+    started_at_ts: Optional[float] = None
+    finished_at_ts: Optional[float] = None
+    elapsed_ms: Optional[int] = None
+    created_at_ts: Optional[float] = None
+    updated_at_ts: Optional[float] = None
+    executor_type: Optional[str] = None
+    executor_task_id: Optional[str] = None
+    relation_type: Optional[str] = None
+    relation_entity_id: Optional[str] = None
+    resource_type: Optional[str] = None
+    navigate_relation_type: Optional[str] = None
+    navigate_relation_entity_id: Optional[str] = None

@@ -34,6 +34,7 @@ from app.services.studio.shot_frames import (
     update as update_shot_frame_image_service,
 )
 from app.services.studio.shots import (
+    build_shot_read,
     create as create_shot_service,
     delete as delete_shot_service,
     get as get_shot_service,
@@ -41,10 +42,18 @@ from app.services.studio.shots import (
     update as update_shot_service,
 )
 from app.services.studio import (
+    accept_shot_extracted_dialogue_candidate,
+    build_shot_preparation_state,
     get_shot_assets_overview,
     ignore_shot_extracted_candidate,
+    ignore_shot_extracted_dialogue_candidate,
+    link_existing_asset_for_preparation,
     link_shot_extracted_candidate,
     list_shot_extracted_candidates,
+    list_shot_extracted_dialogue_candidates,
+    get_shot_video_readiness,
+    list_shot_runtime_summary_by_chapter,
+    render_shot_video_prompt_preview,
     set_skip_extraction,
 )
 from app.schemas.common import ApiResponse, PaginatedData, created_response, empty_response, success_response
@@ -65,6 +74,7 @@ from app.schemas.studio.shots import (
     ShotDialogLineUpdate,
     ProjectPropLinkRead,
     ShotRead,
+    ShotRuntimeSummaryRead,
     ProjectSceneLinkRead,
     ShotUpdate,
     ShotFrameImageCreate,
@@ -72,7 +82,15 @@ from app.schemas.studio.shots import (
     ShotFrameImageUpdate,
     ShotExtractedCandidateLinkRequest,
     ShotExtractedCandidateRead,
+    ShotExtractedDialogueCandidateAcceptRequest,
+    ShotExtractedDialogueCandidateRead,
+    ShotPreparationMutationAction,
+    ShotPreparationLinkRequest,
+    ShotPreparationMutationResultRead,
+    ShotPreparationStateRead,
     ShotSkipExtractionUpdate,
+    ShotVideoReadinessRead,
+    ShotVideoPromptPreviewRead,
 )
 
 router = APIRouter()
@@ -128,7 +146,20 @@ async def create_shot(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ShotRead]:
     obj = await create_shot_service(db, body=body)
-    return created_response(ShotRead.model_validate(obj))
+    return created_response(await build_shot_read(db, shot=obj))
+
+
+@router.get(
+    "/runtime-summary",
+    response_model=ApiResponse[list[ShotRuntimeSummaryRead]],
+    summary="按章节获取镜头运行时任务态摘要",
+)
+async def list_shot_runtime_summary(
+    chapter_id: str = Query(..., description="章节 ID"),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[ShotRuntimeSummaryRead]]:
+    rows = await list_shot_runtime_summary_by_chapter(db, chapter_id=chapter_id)
+    return success_response(rows)
 
 
 @router.get(
@@ -158,6 +189,19 @@ async def get_shot_extracted_candidates(
 
 
 @router.get(
+    "/{shot_id}/extracted-dialogue-candidates",
+    response_model=ApiResponse[list[ShotExtractedDialogueCandidateRead]],
+    summary="获取镜头提取对白候选项",
+)
+async def get_shot_extracted_dialogue_candidates(
+    shot_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[list[ShotExtractedDialogueCandidateRead]]:
+    rows = await list_shot_extracted_dialogue_candidates(db, shot_id=shot_id)
+    return success_response([ShotExtractedDialogueCandidateRead.model_validate(row) for row in rows])
+
+
+@router.get(
     "/{shot_id}/assets-overview",
     response_model=ApiResponse[ShotAssetsOverviewRead],
     summary="获取镜头资产总览（已关联资产 + 提取候选）",
@@ -170,49 +214,177 @@ async def get_shot_assets_overview_api(
     return success_response(data)
 
 
+@router.get(
+    "/{shot_id}/preparation-state",
+    response_model=ApiResponse[ShotPreparationStateRead],
+    summary="获取镜头准备页聚合状态",
+)
+async def get_shot_preparation_state_api(
+    shot_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ShotPreparationStateRead]:
+    data = await build_shot_preparation_state(db, shot_id=shot_id)
+    return success_response(data)
+
+
+@router.post(
+    "/{shot_id}/preparation-link",
+    response_model=ApiResponse[ShotPreparationMutationResultRead],
+    summary="准备页关联现有实体并返回最新聚合状态",
+)
+async def link_existing_asset_for_preparation_api(
+    shot_id: str,
+    body: ShotPreparationLinkRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ShotPreparationMutationResultRead]:
+    data = await link_existing_asset_for_preparation(
+        db,
+        project_id=body.project_id,
+        chapter_id=body.chapter_id,
+        shot_id=shot_id,
+        entity_type=body.entity_type,
+        linked_entity_id=body.linked_entity_id,
+    )
+    return success_response(
+        ShotPreparationMutationResultRead(
+            action=ShotPreparationMutationAction.link_asset_candidate,
+            state=data,
+        )
+    )
+
+
+@router.get(
+    "/{shot_id}/video-prompt-preview",
+    response_model=ApiResponse[ShotVideoPromptPreviewRead],
+    summary="预览镜头视频提示词",
+)
+async def preview_shot_video_prompt(
+    shot_id: str,
+    template_id: str | None = Query(None, description="指定视频提示词模板 ID；不传则使用默认模板"),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ShotVideoPromptPreviewRead]:
+    data = await render_shot_video_prompt_preview(db, shot_id=shot_id, template_id=template_id)
+    return success_response(data)
+
+
+@router.get(
+    "/{shot_id}/video-readiness",
+    response_model=ApiResponse[ShotVideoReadinessRead],
+    summary="获取镜头视频生成准备度",
+)
+async def get_shot_video_readiness_api(
+    shot_id: str,
+    reference_mode: str = Query("text_only", description="参考模式：first/last/key/first_last/first_last_key/text_only"),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ShotVideoReadinessRead]:
+    data = await get_shot_video_readiness(db, shot_id=shot_id, reference_mode=reference_mode)
+    return success_response(data)
+
+
 @router.patch(
     "/{shot_id}/skip-extraction",
-    response_model=ApiResponse[ShotRead],
+    response_model=ApiResponse[ShotPreparationMutationResultRead],
     summary="设置是否跳过镜头信息提取",
 )
 async def update_shot_skip_extraction(
     shot_id: str,
     body: ShotSkipExtractionUpdate,
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotRead]:
+) -> ApiResponse[ShotPreparationMutationResultRead]:
     shot = await set_skip_extraction(db, shot_id=shot_id, skip=body.skip)
-    return success_response(ShotRead.model_validate(shot))
+    data = await build_shot_preparation_state(db, shot_id=shot.id)
+    return success_response(
+        ShotPreparationMutationResultRead(
+            action=(
+                ShotPreparationMutationAction.skip_extraction
+                if body.skip
+                else ShotPreparationMutationAction.resume_extraction
+            ),
+            state=data,
+        )
+    )
 
 
 @router.patch(
     "/extracted-candidates/{candidate_id}/link",
-    response_model=ApiResponse[ShotExtractedCandidateRead],
+    response_model=ApiResponse[ShotPreparationMutationResultRead],
     summary="确认并关联镜头提取候选项",
 )
 async def link_extracted_candidate(
     candidate_id: int,
     body: ShotExtractedCandidateLinkRequest,
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotExtractedCandidateRead]:
+) -> ApiResponse[ShotPreparationMutationResultRead]:
     row = await link_shot_extracted_candidate(
         db,
         candidate_id=candidate_id,
         linked_entity_id=body.linked_entity_id,
     )
-    return success_response(ShotExtractedCandidateRead.model_validate(row))
+    data = await build_shot_preparation_state(db, shot_id=row.shot_id)
+    return success_response(
+        ShotPreparationMutationResultRead(
+            action=ShotPreparationMutationAction.link_asset_candidate,
+            state=data,
+        )
+    )
 
 
 @router.patch(
     "/extracted-candidates/{candidate_id}/ignore",
-    response_model=ApiResponse[ShotExtractedCandidateRead],
+    response_model=ApiResponse[ShotPreparationMutationResultRead],
     summary="忽略镜头提取候选项",
 )
 async def ignore_extracted_candidate(
     candidate_id: int,
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ShotExtractedCandidateRead]:
+) -> ApiResponse[ShotPreparationMutationResultRead]:
     row = await ignore_shot_extracted_candidate(db, candidate_id=candidate_id)
-    return success_response(ShotExtractedCandidateRead.model_validate(row))
+    data = await build_shot_preparation_state(db, shot_id=row.shot_id)
+    return success_response(
+        ShotPreparationMutationResultRead(
+            action=ShotPreparationMutationAction.ignore_asset_candidate,
+            state=data,
+        )
+    )
+
+
+@router.patch(
+    "/extracted-dialogue-candidates/{candidate_id}/accept",
+    response_model=ApiResponse[ShotPreparationMutationResultRead],
+    summary="接受镜头提取对白候选项",
+)
+async def accept_extracted_dialogue_candidate(
+    candidate_id: int,
+    body: ShotExtractedDialogueCandidateAcceptRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ShotPreparationMutationResultRead]:
+    row = await accept_shot_extracted_dialogue_candidate(db, candidate_id=candidate_id, body=body)
+    data = await build_shot_preparation_state(db, shot_id=row.shot_id)
+    return success_response(
+        ShotPreparationMutationResultRead(
+            action=ShotPreparationMutationAction.accept_dialogue_candidate,
+            state=data,
+        )
+    )
+
+
+@router.patch(
+    "/extracted-dialogue-candidates/{candidate_id}/ignore",
+    response_model=ApiResponse[ShotPreparationMutationResultRead],
+    summary="忽略镜头提取对白候选项",
+)
+async def ignore_extracted_dialogue_candidate(
+    candidate_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ShotPreparationMutationResultRead]:
+    row = await ignore_shot_extracted_dialogue_candidate(db, candidate_id=candidate_id)
+    data = await build_shot_preparation_state(db, shot_id=row.shot_id)
+    return success_response(
+        ShotPreparationMutationResultRead(
+            action=ShotPreparationMutationAction.ignore_dialogue_candidate,
+            state=data,
+        )
+    )
 
 
 @router.get(
@@ -225,7 +397,7 @@ async def get_shot(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ShotRead]:
     obj = await get_shot_service(db, shot_id=shot_id)
-    return success_response(ShotRead.model_validate(obj))
+    return success_response(await build_shot_read(db, shot=obj))
 
 
 @router.patch(
@@ -239,7 +411,7 @@ async def update_shot(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ShotRead]:
     obj = await update_shot_service(db, shot_id=shot_id, body=body)
-    return success_response(ShotRead.model_validate(obj))
+    return success_response(await build_shot_read(db, shot=obj))
 
 
 @router.delete(

@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ShotExtractionSummaryRead } from './ShotExtractionSummaryRead';
 import type { ShotStatus } from './ShotStatus';
 export type ShotRead = {
     /**
@@ -40,5 +41,13 @@ export type ShotRead = {
      * 已生成视频关联的文件 ID（files.id，type=video）
      */
     generated_video_file_id?: (string | null);
+    /**
+     * 最近一次完成信息提取的时间
+     */
+    last_extracted_at?: (string | null);
+    /**
+     * 镜头提取状态摘要
+     */
+    extraction: ShotExtractionSummaryRead;
 };
 

@@ -57,6 +57,7 @@ from app.services.studio.shot_details import (
 from app.services.studio.shot_dialogs import (
     create as create_shot_dialog_line,
     delete as delete_shot_dialog_line,
+    list_by_shot as list_shot_dialog_lines_by_shot,
     list_paginated as list_shot_dialog_lines_paginated,
     update as update_shot_dialog_line,
 )
@@ -75,8 +76,21 @@ from app.services.studio.shot_extracted_candidates import (
     set_skip_extraction,
     sync_from_extraction_draft as sync_shot_extracted_candidates_from_draft,
 )
+from app.services.studio.shot_extracted_dialogue_candidates import (
+    list_by_shot as list_shot_extracted_dialogue_candidates,
+    mark_accepted as accept_shot_extracted_dialogue_candidate,
+    mark_ignored as ignore_shot_extracted_dialogue_candidate,
+    replace_for_shot as replace_shot_extracted_dialogue_candidates,
+    sync_from_extraction_draft as sync_shot_extracted_dialogue_candidates_from_draft,
+)
+from app.services.studio.shot_video_prompt_pack import (
+    build_shot_video_prompt_pack,
+    render_shot_video_prompt_preview,
+)
+from app.services.studio.shot_runtime_summary import list_shot_runtime_summary_by_chapter
+from app.services.studio.shot_preparation_state import build_shot_preparation_state, link_existing_asset_for_preparation
+from app.services.studio.shot_video_readiness import get_shot_video_readiness
 from app.services.studio.shot_status import (
-    has_active_generation_tasks,
     mark_shot_generating,
     recompute_shot_status,
 )
@@ -127,19 +141,30 @@ __all__ = [
     "list_shot_character_links",
     "list_shot_linked_assets",
     "list_shot_details_paginated",
+    "list_shot_dialog_lines_by_shot",
     "list_shot_dialog_lines_paginated",
     "list_shot_frame_images_paginated",
     "list_shot_extracted_candidates",
+    "list_shot_extracted_dialogue_candidates",
+    "build_shot_preparation_state",
+    "link_existing_asset_for_preparation",
+    "build_shot_video_prompt_pack",
     "list_shot_linked_assets_paginated",
     "get_shot_assets_overview",
+    "get_shot_video_readiness",
     "list_shots_paginated",
     "link_shot_extracted_candidate",
     "link_shot_extracted_candidate_by_name",
     "ignore_shot_extracted_candidate",
+    "accept_shot_extracted_dialogue_candidate",
+    "ignore_shot_extracted_dialogue_candidate",
     "replace_shot_extracted_candidates",
+    "replace_shot_extracted_dialogue_candidates",
+    "render_shot_video_prompt_preview",
+    "list_shot_runtime_summary_by_chapter",
     "set_skip_extraction",
     "sync_shot_extracted_candidates_from_draft",
-    "has_active_generation_tasks",
+    "sync_shot_extracted_dialogue_candidates_from_draft",
     "mark_shot_generating",
     "normalize_entity_type",
     "recompute_shot_status",

@@ -35,6 +35,7 @@ class TaskManager:
         *,
         task: BaseTask,
         mode: DeliveryMode,
+        task_kind: str | None = None,
         run_args: dict[str, Any] | None = None,
     ) -> TaskRecord:
         """创建任务记录。
@@ -46,9 +47,14 @@ class TaskManager:
         """
         payload: dict[str, Any] = {
             "task_class": task.__class__.__name__,
+            "task_kind": task_kind or task.__class__.__name__,
             "run_args": run_args or {},
         }
-        return await self.store.create(payload=payload, mode=mode)
+        return await self.store.create(
+            payload=payload,
+            mode=mode,
+            task_kind=str(payload["task_kind"]),
+        )
 
     async def start(self, *, task_id: str) -> Optional[AsyncIterator[Any]]:
         task = await self.store.get(task_id)
@@ -62,6 +68,21 @@ class TaskManager:
         if view is None:
             raise ValueError(f"Task not found: {task_id}")
         return view
+
+    async def request_cancel(self, *, task_id: str, reason: str | None = None) -> TaskRecord:
+        rec = await self.store.request_cancel(task_id, reason)
+        if rec is None:
+            raise ValueError(f"Task not found: {task_id}")
+        return rec
+
+    async def is_cancel_requested(self, *, task_id: str) -> bool:
+        return await self.store.is_cancel_requested(task_id)
+
+    async def mark_cancelled(self, *, task_id: str) -> TaskRecord:
+        rec = await self.store.mark_cancelled(task_id)
+        if rec is None:
+            raise ValueError(f"Task not found: {task_id}")
+        return rec
 
     async def stream(self, *, task_id: str) -> AsyncIterator[Any]:
         task = await self.store.get(task_id)

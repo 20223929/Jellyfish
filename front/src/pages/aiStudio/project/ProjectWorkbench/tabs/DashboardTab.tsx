@@ -2,21 +2,36 @@ import { Card, Button, Statistic, Row, Col, Progress, Space, Spin } from 'antd'
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
-  RiseOutlined,
+  FileSearchOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { TabKey } from '../constants'
 import { getChapterShotsPath, getChapterStudioPath, getProjectChaptersPath, getProjectEditorPath } from '../routes'
 import { useProject, useChapters } from '../hooks/useProjectData'
 import { ensureHasShotsBeforeShooting } from '../ensureHasShotsBeforeShooting'
 import { getChapterPreparationState } from '../chapterPreparation'
+import {
+  loadChapterFlowStats,
+  loadProjectFlowStatsForChapters,
+  type ChapterFlowStats,
+  type ProjectFlowStats,
+} from '../projectFlowStats'
 
 export function DashboardTab({ onSelectTab }: { onSelectTab: (tab: TabKey) => void }) {
   const navigate = useNavigate()
   const { projectId } = useParams<{ projectId: string }>()
   const { project, loading: projectLoading } = useProject(projectId)
   const { chapters, loading: chaptersLoading } = useChapters(projectId)
+  const [flowStats, setFlowStats] = useState<ProjectFlowStats>({
+    totalShots: 0,
+    pendingConfirmShots: 0,
+    readyShots: 0,
+    generatingShots: 0,
+  })
+  const [chapterFlowStats, setChapterFlowStats] = useState<ChapterFlowStats[]>([])
+  const [flowStatsLoading, setFlowStatsLoading] = useState(false)
 
   const loading = projectLoading || chaptersLoading
   const chaptersByIndex = [...chapters].sort((a, b) => a.index - b.index)
@@ -29,6 +44,51 @@ export function DashboardTab({ onSelectTab }: { onSelectTab: (tab: TabKey) => vo
     chaptersByIndex[0] ??
     null
 
+  useEffect(() => {
+    let cancelled = false
+    if (!projectId || !chapters.length) {
+      setFlowStats({
+        totalShots: 0,
+        pendingConfirmShots: 0,
+        readyShots: 0,
+        generatingShots: 0,
+      })
+      setChapterFlowStats([])
+      return () => {
+        cancelled = true
+      }
+    }
+
+    const run = async () => {
+      setFlowStatsLoading(true)
+      try {
+        const [stats, chapterStats] = await Promise.all([
+          loadProjectFlowStatsForChapters(chapters),
+          loadChapterFlowStats(chapters),
+        ])
+        if (!cancelled) setFlowStats(stats)
+        if (!cancelled) setChapterFlowStats(chapterStats)
+      } catch {
+        if (!cancelled) {
+          setFlowStats({
+            totalShots: 0,
+            pendingConfirmShots: 0,
+            readyShots: 0,
+            generatingShots: 0,
+          })
+          setChapterFlowStats([])
+        }
+      } finally {
+        if (!cancelled) setFlowStatsLoading(false)
+      }
+    }
+
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [chapters, projectId])
+
   if (loading && !project) {
     return (
       <div className="flex justify-center items-center py-16">
@@ -40,14 +100,15 @@ export function DashboardTab({ onSelectTab }: { onSelectTab: (tab: TabKey) => vo
     return null
   }
 
-  const totalShots = chapters.reduce((s, c) => s + c.storyboardCount, 0)
-  const completedShots = Math.round((totalShots * project.progress) / 100)
   const incompleteCount = incompleteChapters.length
   const recommendedState = recommendedChapter ? getChapterPreparationState(recommendedChapter) : null
   const chaptersNeedingRawText = chaptersByIndex.filter((chapter) => getChapterPreparationState(chapter).key === 'edit_raw').length
   const chaptersNeedingShotExtract = chaptersByIndex.filter((chapter) => getChapterPreparationState(chapter).key === 'extract_shots').length
   const chaptersNeedingShotPrep = chaptersByIndex.filter((chapter) => getChapterPreparationState(chapter).key === 'prepare_shots').length
   const chaptersReadyForShoot = chaptersByIndex.filter((chapter) => getChapterPreparationState(chapter).key === 'shoot').length
+  const topPendingChapter = [...chapterFlowStats].sort((a, b) => b.pendingConfirmShots - a.pendingConfirmShots)[0]
+  const topGeneratingChapter = [...chapterFlowStats].sort((a, b) => b.generatingShots - a.generatingShots)[0]
+  const topReadyChapter = [...chapterFlowStats].sort((a, b) => b.readyShots - a.readyShots)[0]
 
   const handleRecommendedAction = () => {
     if (!projectId) return
@@ -141,19 +202,34 @@ export function DashboardTab({ onSelectTab }: { onSelectTab: (tab: TabKey) => vo
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card size="small" className="h-full">
-            <Statistic title="已生成片段/总分镜" value={completedShots} suffix={`/ ${totalShots}`} />
+            <Statistic
+              title="待确认分镜"
+              value={flowStats.pendingConfirmShots}
+              suffix={flowStats.totalShots ? `/ ${flowStats.totalShots}` : undefined}
+              loading={flowStatsLoading}
+            />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card size="small" className="h-full">
-            <Statistic title="资产覆盖率" value={76} suffix="%" />
+            <Statistic
+              title="已就绪分镜"
+              value={flowStats.readyShots}
+              loading={flowStatsLoading}
+              prefix={<CheckCircleOutlined />}
+            />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card size="small" className="h-full">
-            <Statistic title="整体进度" value={project.progress} suffix="%" prefix={<RiseOutlined />} />
+            <Statistic
+              title="生成中分镜"
+              value={flowStats.generatingShots}
+              loading={flowStatsLoading}
+              prefix={<ClockCircleOutlined />}
+            />
             <Progress
-              percent={project.progress}
+              percent={flowStats.totalShots ? Math.round((flowStats.readyShots / flowStats.totalShots) * 100) : project.progress}
               showInfo={false}
               size="small"
               strokeColor={{ from: '#6366f1', to: '#a855f7' }}
@@ -206,14 +282,51 @@ export function DashboardTab({ onSelectTab }: { onSelectTab: (tab: TabKey) => vo
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={14}>
-          <Card title="最近活动" size="small">
-            <ul className="list-none pl-0 m-0 space-y-2 text-sm text-gray-600">
-              <li>· 生成第5章第12镜参考图</li>
-              <li>· 更新第3章分镜脚本</li>
-              <li>· 完成第2章拍摄</li>
-            </ul>
-            <Button type="link" className="p-0 mt-2">
-              查看更多
+          <Card title="动态摘要" size="small">
+            <div className="space-y-3 text-sm">
+              <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2">
+                <div className="flex items-center gap-2 font-medium text-amber-800">
+                  <ClockCircleOutlined />
+                  待确认压力最大
+                </div>
+                <div className="mt-1 text-gray-700">
+                  {topPendingChapter && topPendingChapter.pendingConfirmShots > 0
+                    ? `第${topPendingChapter.chapterIndex ?? '-'}章还有 ${topPendingChapter.pendingConfirmShots} 条分镜待确认，建议优先处理。`
+                    : '当前没有待确认分镜积压。'}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
+                <div className="flex items-center gap-2 font-medium text-blue-800">
+                  <VideoCameraOutlined />
+                  当前生成最活跃
+                </div>
+                <div className="mt-1 text-gray-700">
+                  {topGeneratingChapter && topGeneratingChapter.generatingShots > 0
+                    ? `第${topGeneratingChapter.chapterIndex ?? '-'}章有 ${topGeneratingChapter.generatingShots} 条分镜正在生成，可以继续关注结果。`
+                    : '当前没有分镜处于生成中。'}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2">
+                <div className="flex items-center gap-2 font-medium text-emerald-800">
+                  <CheckCircleOutlined />
+                  最适合继续推进
+                </div>
+                <div className="mt-1 text-gray-700">
+                  {topReadyChapter && topReadyChapter.readyShots > 0
+                    ? `第${topReadyChapter.chapterIndex ?? '-'}章已有 ${topReadyChapter.readyShots} 条已就绪分镜，适合继续推进视频生成。`
+                    : '当前还没有明显可继续推进的视频生成批次。'}
+                </div>
+              </div>
+            </div>
+            <Button
+              type="link"
+              className="p-0 mt-3"
+              icon={<FileSearchOutlined />}
+              onClick={() => onSelectTab('chapters')}
+            >
+              去章节里继续推进
             </Button>
           </Card>
         </Col>

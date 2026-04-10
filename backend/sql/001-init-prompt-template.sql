@@ -1,6 +1,7 @@
 BEGIN;
 SET NAMES utf8mb4;
-	INSERT IGNORE INTO `prompt_templates` (`id`, `category`, `name`, `preview`, `content`, `variables`, `created_at`, `updated_at`, `is_system`, `is_default`)
+	DELETE FROM `prompt_templates` WHERE `id` IN ('1', '2', '3', '4', '5', '6');
+	INSERT INTO `prompt_templates` (`id`, `category`, `name`, `preview`, `content`, `variables`, `created_at`, `updated_at`, `is_system`, `is_default`)
 	VALUES
 		('1', 'actor_image_front', '演员正面图片提示词', '默认演员正面提示词', '视觉风格：{{ visual_style }}\n画面风格：{{ style }}\n\n高质量电影级{{ visual_style }}人像摄影，超详细专业演员写真：\n{{ description }}\n\n镜头方向：正面\n画面要求：\n- 超高细节，8k分辨率，极致锐度与纹理\n- 电影感浅景深，f/1.4大光圈，背景虚化自然明显\n- 专业商业人像摄影风格 + 当代电影剧照质感\n- 自然生动表情，富有故事感和角色沉浸感\n- 优秀构图，经典三分法或黄金分割构图\n- 完美贴合{{ visual_style }}视觉语言与{{ style }}整体氛围，风格高度一致\n\n负面提示（强烈负面）：\nlow quality, worst quality, blurry, deformed, bad anatomy, bad hands, missing fingers, extra limbs, poorly drawn face, bad proportions, watermark, text, logo, signature, overexposed, underexposed, plastic skin, doll, lowres, jpeg artifacts, grainy\n{%- if \"动漫\" in visual_style or \"anime\" in visual_style.lower() -%}\nbad anime, deformed anime, low quality anime, flat color, flat shading, 3d render, cgi\n{%- else -%}\ncartoon, 3d render, cgi, illustration, painting, sketch, anime\n{%- endif -%}\n{%- if \"古装\" in style or \"古代\" in style -%}\nmodern clothing, modern background, contemporary elements\n{%- endif -%}', '[\"description\", \"visual_style\", \"style\", \"base_negative\"]', '2026-03-17 06:38:57', '2026-03-30 16:00:00', 1, 1);
 	INSERT IGNORE INTO `prompt_templates` (`id`, `category`, `name`, `preview`, `content`, `variables`, `created_at`, `updated_at`, `is_system`, `is_default`)

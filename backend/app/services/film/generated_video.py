@@ -23,7 +23,10 @@ from app.models.studio import FileItem, Shot, ShotDetail, ShotFrameImage, ShotFr
 from app.models.types import FileUsageKind
 from app.services.common import entity_not_found
 from app.services.studio.file_usages import sync_usage_from_shot_context
-from app.services.studio import recompute_shot_status
+from app.services.studio.shot_status import recompute_shot_status
+from app.services.studio.shot_video_prompt_pack import render_shot_video_prompt_preview
+from app.services.worker.async_task_support import cancel_if_requested_async
+from app.services.worker.task_logging import log_task_event, log_task_failure
 from app.utils.files import create_file_from_url_or_b64
 
 REQUIRED_FRAMES_BY_MODE: dict[str, tuple[ShotFrameType, ...]] = {
@@ -139,9 +142,12 @@ async def preview_prompt_and_images(
         ),
         "text_only": "",
     }
-    final_prompt = (prompt or "").strip() or prompt_by_mode[reference_mode]
-    if reference_mode == "text_only" and not final_prompt:
-        raise HTTPException(status_code=400, detail="prompt is required when reference_mode=text_only")
+    final_prompt = (prompt or "").strip()
+    if not final_prompt:
+        preview = await render_shot_video_prompt_preview(db, shot_id=shot_id)
+        final_prompt = preview.rendered_prompt.strip() or prompt_by_mode[reference_mode]
+    if not final_prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
 
     image_ids = [str(frame_map[ft].file_id) for ft in required_frames if frame_map.get(ft) and frame_map[ft].file_id]
     return final_prompt, image_ids, shot_detail
@@ -212,6 +218,11 @@ async def build_run_args(
     validate_images_count(reference_mode, images)
 
     final_prompt = (prompt or "").strip()
+    prompt_preview_payload: dict | None = None
+    if not final_prompt:
+        preview = await render_shot_video_prompt_preview(db, shot_id=shot_id)
+        final_prompt = preview.rendered_prompt.strip()
+        prompt_preview_payload = preview.model_dump()
     if not final_prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
 
@@ -219,7 +230,7 @@ async def build_run_args(
     frame_data_urls = [await file_id_to_data_url(db, file_id=file_id) for file_id in images]
     frame_map = {ft: frame_data_urls[i] for i, ft in enumerate(required_frames)}
 
-    return {
+    run_args = {
         "shot_id": shot_id,
         "provider": provider_cfg.provider,
         "api_key": provider_cfg.api_key,
@@ -234,6 +245,9 @@ async def build_run_args(
             "seconds": shot_detail.duration,
         },
     }
+    if prompt_preview_payload is not None:
+        run_args["prompt_preview"] = prompt_preview_payload
+    return run_args
 
 
 async def persist_generated_video_to_shot(
@@ -292,7 +306,6 @@ async def persist_generated_video_to_shot(
 
 
 async def run_video_generation_task(
-    *,
     task_id: str,
     run_args: dict,
 ) -> None:
@@ -302,6 +315,10 @@ async def run_video_generation_task(
             await store.set_status(task_id, TaskStatus.running)
             await store.set_progress(task_id, 10)
             await session.commit()
+            log_task_event("video_generation", task_id, "running")
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("video_generation", task_id, "cancelled", stage="before_execute")
+                return
 
             provider = str(run_args.get("provider") or "")
             api_key = str(run_args.get("api_key") or "")
@@ -325,6 +342,9 @@ async def run_video_generation_task(
                     detailed_error = str(status_dict.get("error") or "")
                 msg = detailed_error or "Video generation task returned no result"
                 raise RuntimeError(msg)
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("video_generation", task_id, "cancelled", stage="after_execute")
+                return
 
             shot_id = str(run_args.get("shot_id") or "")
             if not shot_id:
@@ -342,10 +362,14 @@ async def run_video_generation_task(
             result_payload = result.model_dump()
             result_payload["file_id"] = file_obj.id
             await store.set_result(task_id, result_payload)
+            if await cancel_if_requested_async(store=store, task_id=task_id, session=session):
+                log_task_event("video_generation", task_id, "cancelled", stage="after_persist")
+                return
             await store.set_progress(task_id, 100)
             await store.set_status(task_id, TaskStatus.succeeded)
             await recompute_shot_status(session, shot_id=shot_id)
             await session.commit()
+            log_task_event("video_generation", task_id, "succeeded")
         except Exception as exc:  # noqa: BLE001
             await session.rollback()
             async with async_session_maker() as s2:
@@ -356,3 +380,4 @@ async def run_video_generation_task(
                 if shot_id:
                     await recompute_shot_status(s2, shot_id=shot_id)
                 await s2.commit()
+            log_task_failure("video_generation", task_id, str(exc))

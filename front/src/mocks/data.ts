@@ -32,7 +32,7 @@ export interface Chapter {
   updatedAt: string
 }
 
-export type ShotStatus = 'pending' | 'generating' | 'ready'
+export type ShotStatus = 'pending' | 'ready'
 
 export interface Shot {
   id: string
@@ -340,7 +340,7 @@ export const shots: Shot[] = [
     title: '中景：出租屋内静止的风扇',
     duration: 5,
     thumbnail: '/mock/thumbnails/p1-c1-s2.jpg',
-    status: 'generating',
+    status: 'pending',
     scriptExcerpt: '电风扇吱呀吱呀地转着，镜头慢慢推向桌上的欠条。',
   },
   {
@@ -390,7 +390,7 @@ export const shots: Shot[] = [
     title: '远景：窗外夜色',
     duration: 6,
     thumbnail: '/mock/thumbnails/p1-c1-s7.jpg',
-    status: 'generating',
+    status: 'pending',
     scriptExcerpt: '透过窗户可见远处路灯与零星车灯。',
   },
   {
@@ -470,7 +470,7 @@ export const shots: Shot[] = [
     title: '长安城门外',
     duration: 6,
     thumbnail: '/mock/thumbnails/p3-c5-s1.jpg',
-    status: 'generating',
+    status: 'pending',
     scriptExcerpt: '少年牵马入城，城门守卫盘查。',
   },
 ]
@@ -991,4 +991,3 @@ export const defaultModelSettings: ModelSettings = {
   api_timeout: 30,
   log_level: 'info',
 }
-

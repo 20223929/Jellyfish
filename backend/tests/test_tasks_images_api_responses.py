@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api.v1.routes.film import tasks_images as route
-from app.dependencies import get_db, get_nothinking_llm
+from app.dependencies import get_db
 from app.main import app
 
 
@@ -37,15 +38,6 @@ class _FakeDB:
         self.committed = True
 
 
-class _DummyLLM:
-    pass
-
-
-def _close_task_stub(coro):
-    coro.close()
-    return None
-
-
 async def _async_noop(*_args, **_kwargs) -> None:
     return None
 
@@ -57,10 +49,6 @@ def _override_db(db: _FakeDB):
     return _get_db
 
 
-def _override_llm() -> _DummyLLM:
-    return _DummyLLM()
-
-
 def test_create_shot_frame_prompt_task_returns_created_envelope(client: TestClient, monkeypatch) -> None:
     db = _FakeDB()
 
@@ -69,10 +57,9 @@ def test_create_shot_frame_prompt_task_returns_created_envelope(client: TestClie
 
     monkeypatch.setattr(route, "build_shot_frame_prompt_run_args", _fake_build)
     monkeypatch.setattr(route, "TaskManager", _FakeTaskManager)
-    monkeypatch.setattr(route.asyncio, "create_task", _close_task_stub)
+    monkeypatch.setattr(route, "enqueue_task_execution", lambda task_id: SimpleNamespace(id=f"celery-{task_id}"))
     monkeypatch.setattr(route, "mark_shot_generating", _async_noop)
     app.dependency_overrides[get_db] = _override_db(db)
-    app.dependency_overrides[get_nothinking_llm] = _override_llm
     try:
         response = client.post(
             "/api/v1/film/tasks/shot-frame-prompts",
@@ -101,7 +88,6 @@ def test_create_shot_frame_prompt_task_invalid_frame_type_returns_api_response(
 
     monkeypatch.setattr(route, "normalize_frame_type", _fake_normalize)
     app.dependency_overrides[get_db] = _override_db(db)
-    app.dependency_overrides[get_nothinking_llm] = _override_llm
     try:
         response = client.post(
             "/api/v1/film/tasks/shot-frame-prompts",
@@ -129,7 +115,6 @@ def test_create_shot_frame_prompt_task_missing_shot_detail_returns_api_response(
 
     monkeypatch.setattr(route, "build_shot_frame_prompt_run_args", _fake_build)
     app.dependency_overrides[get_db] = _override_db(db)
-    app.dependency_overrides[get_nothinking_llm] = _override_llm
     try:
         response = client.post(
             "/api/v1/film/tasks/shot-frame-prompts",
@@ -145,7 +130,6 @@ def test_create_shot_frame_prompt_task_missing_shot_detail_returns_api_response(
 def test_create_shot_frame_prompt_task_validation_error_returns_api_response(client: TestClient) -> None:
     db = _FakeDB()
     app.dependency_overrides[get_db] = _override_db(db)
-    app.dependency_overrides[get_nothinking_llm] = _override_llm
     try:
         response = client.post(
             "/api/v1/film/tasks/shot-frame-prompts",

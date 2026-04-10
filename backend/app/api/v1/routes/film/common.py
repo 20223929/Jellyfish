@@ -65,10 +65,44 @@ class TaskCreated(BaseModel):
     task_id: str = Field(..., description="任务 ID")
 
 
+class AsyncTaskCreateRead(BaseModel):
+    task_id: str = Field(..., description="任务 ID")
+    status: TaskStatus = Field(..., description="任务状态")
+    reused: bool = Field(False, description="是否复用了当前业务实体已有的活跃任务")
+    relation_type: str | None = Field(None, description="业务关联类型")
+    relation_entity_id: str | None = Field(None, description="业务关联实体 ID")
+
+
 class TaskStatusRead(BaseModel):
     task_id: str
     status: TaskStatus
     progress: int = Field(..., ge=0, le=100)
+    cancel_requested: bool = Field(False, description="是否已请求取消")
+    cancel_requested_at_ts: float | None = Field(None, description="请求取消时间戳")
+    started_at_ts: float | None = Field(None, description="任务开始执行时间戳")
+    finished_at_ts: float | None = Field(None, description="任务结束时间戳")
+    elapsed_ms: int | None = Field(None, description="任务累计执行耗时（毫秒）")
+
+
+class TaskListItemRead(BaseModel):
+    task_id: str
+    task_kind: str = Field(..., description="业务任务类型")
+    status: TaskStatus
+    progress: int = Field(..., ge=0, le=100)
+    cancel_requested: bool = Field(False, description="是否已请求取消")
+    cancel_requested_at_ts: float | None = Field(None, description="请求取消时间戳")
+    started_at_ts: float | None = Field(None, description="任务开始执行时间戳")
+    finished_at_ts: float | None = Field(None, description="任务结束时间戳")
+    elapsed_ms: int | None = Field(None, description="任务累计执行耗时（毫秒）")
+    created_at_ts: float | None = Field(None, description="任务创建时间戳")
+    updated_at_ts: float | None = Field(None, description="任务更新时间戳")
+    executor_type: str | None = Field(None, description="执行器类型，如 celery")
+    executor_task_id: str | None = Field(None, description="执行器侧任务 ID")
+    relation_type: str | None = Field(None, description="业务关联类型")
+    relation_entity_id: str | None = Field(None, description="业务关联实体 ID")
+    resource_type: str | None = Field(None, description="资源类型")
+    navigate_relation_type: str | None = Field(None, description="前端默认跳转关联类型")
+    navigate_relation_entity_id: str | None = Field(None, description="前端默认跳转关联实体 ID")
 
 
 class TaskResultRead(BaseModel):
@@ -77,6 +111,23 @@ class TaskResultRead(BaseModel):
     progress: int = Field(..., ge=0, le=100)
     result: dict | None = None
     error: str = ""
+    cancel_requested: bool = Field(False, description="是否已请求取消")
+    cancel_requested_at_ts: float | None = Field(None, description="请求取消时间戳")
+    started_at_ts: float | None = Field(None, description="任务开始执行时间戳")
+    finished_at_ts: float | None = Field(None, description="任务结束时间戳")
+    elapsed_ms: int | None = Field(None, description="任务累计执行耗时（毫秒）")
+
+
+class TaskCancelRequest(BaseModel):
+    reason: str | None = Field(None, description="取消原因（可选）")
+
+
+class TaskCancelRead(BaseModel):
+    task_id: str
+    status: TaskStatus
+    cancel_requested: bool = Field(..., description="是否已登记取消请求")
+    cancel_requested_at_ts: float | None = Field(None, description="请求取消时间戳")
+    effective_immediately: bool = Field(False, description="是否已立即取消完成")
 
 
 class TaskLinkAdoptRequest(BindTarget):

@@ -7,6 +7,14 @@
  */
 export type VariantAnalysisRequest = {
     /**
+     * 项目 ID（异步任务关联可选）
+     */
+    project_id?: (string | null);
+    /**
+     * 章节 ID（异步任务关联可选）
+     */
+    chapter_id?: (string | null);
+    /**
      * 合并后的实体库（EntityLibrary 的序列化形式；来自 EntityMerger 输出的 merged_library）
      */
     merged_library: Record<string, any>;

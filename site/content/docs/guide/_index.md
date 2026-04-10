@@ -1,18 +1,20 @@
 ---
 title: "开发指南"
 weight: 2
-description: "从项目结构到前后端分层，再到 AI 工作流的开发说明。"
+description: "聚焦怎么开发、怎么协作、怎么接入前后端能力的实践说明。"
 ---
 
-围绕目录结构、前端、后端、OpenAPI 与 AI 工作流做进一步说明。
+这里聚焦“怎么做”的开发说明，不再混放当前架构事实和未来任务计划。
 
-- [项目结构](/docs/guide/project-structure/)
 - [前端说明](/docs/guide/frontend/)
 - [后端说明](/docs/guide/backend/)
 - [OpenAPI](/docs/guide/openapi/)
 - [AI 工作流](/docs/guide/ai-workflow/)
-- [开发规划](/docs/guide/development-plan/)
-- [分镜状态流转说明](/docs/guide/shot-status-flow/)
+
+相关文档已拆分到独立栏目：
+
+- 当前事实与边界请看 [当前架构](/docs/architecture/)
+- 后续执行方案请看 [任务计划](/docs/plans/)
 
 相关发布与阶段记录：
 

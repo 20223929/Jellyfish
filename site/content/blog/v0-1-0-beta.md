@@ -188,8 +188,6 @@ description: "Jellyfish 后端第一阶段发布说明，覆盖 route -> service
 
 - `pending`
   - 当前镜头还没有完成进入视频生成前的确认流程
-- `generating`
-  - 当前镜头存在进行中的关键生成任务
 - `ready`
   - 当前镜头已经具备进入视频生成流程的前置条件
 
@@ -197,21 +195,25 @@ description: "Jellyfish 后端第一阶段发布说明，覆盖 route -> service
 
 > 当前分镜已经完成信息提取确认，因此可以进入视频生成流程。
 
+需要特别注意：
+
+> 运行中的生成任务已经不再写入 `shot.status`。
+> “生成中”应通过 `GenerationTask / GenerationTaskLink`
+> 动态聚合得到，而不是复用 `pending / ready` 这类静态状态。
+
 ### `ready` 的最小必要条件
 
 当前后端按下面这套规则统一计算：
 
-1. 有关键生成任务进行中：
-   - `generating`
-2. `skip_extraction = true`：
+1. `skip_extraction = true`：
    - `ready`
-3. 从未提取过：
+2. 从未提取过：
    - `pending`
-4. 提取过，但当前镜头没有任何候选项：
+3. 提取过，但当前镜头没有任何候选项：
    - `ready`
-5. 所有候选项都已处理完（`linked / ignored`）：
+4. 所有候选项都已处理完（`linked / ignored`）：
    - `ready`
-6. 其他情况：
+5. 其他情况：
    - `pending`
 
 这里“候选项已处理完”是正式规则，不再由前端猜测。
@@ -331,6 +333,29 @@ ChapterShotEditPage
 ```
 
 这条职责线现在已经清晰很多了。
+
+### 4. 分镜页面职责继续收口
+
+这轮后续前端又继续把两页边界往前收了一步：
+
+- `ChapterShotEditPage`
+  - 明确强化为“分镜准备 / 信息确认”主入口
+  - 负责提取、确认、修正，并把镜头推进到 `ready`
+- `ChapterStudio`
+  - 明确强化为“章节生成工作台”
+  - 负责 `video-readiness`、关键帧、参考图、视频参数与视频生成
+
+对应推荐主流程也更明确了：
+
+```text
+分镜编辑页
+→ 提取与确认
+→ shot.status = ready
+→ 进入分镜工作室
+→ 查看 video-readiness
+→ 关键帧 / 参考图 / 视频参数
+→ 生成视频
+```
 
 ## 🐞 Fixed
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.models.studio import (
     Chapter,
@@ -17,7 +18,7 @@ from app.models.studio import (
 )
 from app.schemas.skills.script_processing import StudioScriptExtractionDraft
 from app.services.common import entity_not_found
-from app.services.studio.shot_status import recompute_shot_status
+from app.services.studio.shot_status import recompute_shot_status, recompute_shot_status_sync
 
 
 def _utc_now() -> datetime:
@@ -147,6 +148,41 @@ async def sync_from_extraction_draft(
         )
 
 
+def sync_from_extraction_draft_sync(
+    db: Session,
+    *,
+    chapter_id: str,
+    draft: StudioScriptExtractionDraft,
+) -> None:
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise ValueError(entity_not_found("Chapter"))
+
+    stmt = select(Shot).where(Shot.chapter_id == chapter_id)
+    shots = db.execute(stmt).scalars().all()
+    shot_by_index = {shot.index: shot for shot in shots}
+    character_by_name = {str(item.name).strip(): item for item in (draft.characters or []) if str(item.name).strip()}
+    scene_by_name = {str(item.name).strip(): item for item in (draft.scenes or []) if str(item.name).strip()}
+    prop_by_name = {str(item.name).strip(): item for item in (draft.props or []) if str(item.name).strip()}
+    costume_by_name = {str(item.name).strip(): item for item in (draft.costumes or []) if str(item.name).strip()}
+
+    for shot_draft in draft.shots:
+        shot = shot_by_index.get(shot_draft.index)
+        if shot is None:
+            continue
+        replace_for_shot_sync(
+            db,
+            shot_id=shot.id,
+            candidates=_build_candidates_from_shot_draft(
+                shot_draft,
+                character_by_name=character_by_name,
+                scene_by_name=scene_by_name,
+                prop_by_name=prop_by_name,
+                costume_by_name=costume_by_name,
+            ),
+        )
+
+
 async def replace_for_shot(
     db: AsyncSession,
     *,
@@ -192,6 +228,54 @@ async def replace_for_shot(
         rows.append(row)
     await db.flush()
     await recompute_shot_status(db, shot_id=shot_id)
+    return rows
+
+
+def replace_for_shot_sync(
+    db: Session,
+    *,
+    shot_id: str,
+    candidates: list[dict[str, Any]],
+) -> list[ShotExtractedCandidate]:
+    shot = db.get(Shot, shot_id)
+    if shot is None:
+        raise ValueError(entity_not_found("Shot"))
+
+    existing_stmt = select(ShotExtractedCandidate).where(ShotExtractedCandidate.shot_id == shot_id)
+    existing_rows = list(db.execute(existing_stmt).scalars().all())
+    linked_by_key: dict[tuple[str, str], tuple[str | None, datetime | None]] = {}
+    for row in existing_rows:
+        if row.candidate_status != ShotCandidateStatus.linked:
+            continue
+        key = (str(row.candidate_type), str(row.candidate_name).strip())
+        linked_by_key[key] = (row.linked_entity_id, row.confirmed_at)
+
+    db.execute(delete(ShotExtractedCandidate).where(ShotExtractedCandidate.shot_id == shot_id))
+    shot.skip_extraction = False
+    shot.last_extracted_at = _utc_now()
+
+    rows: list[ShotExtractedCandidate] = []
+    for item in candidates:
+        candidate_type = ShotCandidateType(str(item["candidate_type"]))
+        candidate_name = str(item["candidate_name"]).strip()
+        linked_entity_id, confirmed_at = linked_by_key.get(
+            (candidate_type.value, candidate_name),
+            (None, None),
+        )
+        row = ShotExtractedCandidate(
+            shot_id=shot_id,
+            candidate_type=candidate_type,
+            candidate_name=candidate_name,
+            candidate_status=ShotCandidateStatus.linked if linked_entity_id else ShotCandidateStatus.pending,
+            linked_entity_id=linked_entity_id,
+            source=str(item.get("source") or "extraction"),
+            payload=dict(item.get("payload") or {}),
+            confirmed_at=confirmed_at,
+        )
+        db.add(row)
+        rows.append(row)
+    db.flush()
+    recompute_shot_status_sync(db, shot_id=shot_id)
     return rows
 
 

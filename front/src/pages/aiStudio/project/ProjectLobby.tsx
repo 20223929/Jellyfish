@@ -27,18 +27,33 @@ import {
   BarsOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { projects as mockProjects, type Project } from '../../../mocks/data'
-import { StudioProjectsService } from '../../../services/generated'
-import type { ProjectRead, ProjectStyle } from '../../../services/generated'
+import { chapters as mockChapters, projects as mockProjects, type Project } from '../../../mocks/data'
+import { StudioChaptersService, StudioProjectsService } from '../../../services/generated'
+import type { ChapterRead, ProjectRead, ProjectStyle } from '../../../services/generated'
 import {
   PROJECT_STYLE_OPTIONS_BY_VISUAL,
   ProjectVisualStyleAndStyleFields,
   type ProjectVisualStyleChoice,
 } from './ProjectVisualStyleAndStyleFields'
+import { getChapterPreparationState } from './ProjectWorkbench/chapterPreparation'
+import { ensureHasShotsBeforeShooting } from './ProjectWorkbench/ensureHasShotsBeforeShooting'
+import { getChapterShotsPath, getChapterStudioPath } from './ProjectWorkbench/routes'
+import { loadProjectFlowStatsForChapters, type ProjectFlowStats } from './ProjectWorkbench/projectFlowStats'
 
 type ViewMode = 'grid' | 'compact' | 'large'
-type FilterTab = 'all' | 'inProgress' | 'completed' | 'mine' | 'recent'
+type FilterTab = 'all' | 'editRaw' | 'extractShots' | 'prepareShots' | 'generating' | 'ready'
 type SortKey = 'updatedAt' | 'name' | 'createdAt' | 'chapters'
+type ChapterPreparationInput = Parameters<typeof getChapterPreparationState>[0]
+type ProjectStageSummary = {
+  key: ReturnType<typeof getChapterPreparationState>['key'] | 'create_first_chapter'
+  stageText: string
+  stageColor: string
+  nextActionLabel: string
+  nextActionHint: string
+  chapterId?: string
+  storyboardCount?: number
+}
+type ProjectFlowStatsMap = Record<string, ProjectFlowStats>
 
 const ProjectLobby: React.FC = () => {
   const navigate = useNavigate()
@@ -55,6 +70,8 @@ const ProjectLobby: React.FC = () => {
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [projectStageMap, setProjectStageMap] = useState<Record<string, ProjectStageSummary>>({})
+  const [projectFlowStatsMap, setProjectFlowStatsMap] = useState<ProjectFlowStatsMap>({})
   const [form] = Form.useForm()
   const [editForm] = Form.useForm()
 
@@ -127,6 +144,140 @@ const ProjectLobby: React.FC = () => {
     return 'inProgress'
   }
 
+  useEffect(() => {
+    const list = Array.isArray(projects) ? projects : []
+    if (!list.length) {
+      setProjectStageMap({})
+      setProjectFlowStatsMap({})
+      return
+    }
+
+    const summarizeProjectChapters = (chapters: ChapterPreparationInput[]): ProjectStageSummary => {
+      const chaptersByIndex = [...chapters].sort((a, b) => a.index - b.index)
+      if (!chaptersByIndex.length) {
+        return {
+          key: 'create_first_chapter',
+          stageText: '待创建章节',
+          stageColor: 'default',
+          nextActionLabel: '创建第一章',
+          nextActionHint: '项目还没有章节，建议先创建第一章',
+        }
+      }
+      const findByState = (key: ReturnType<typeof getChapterPreparationState>['key']) =>
+        chaptersByIndex.find((chapter) => getChapterPreparationState(chapter).key === key)
+      const chapter =
+        findByState('edit_raw') ??
+        findByState('extract_shots') ??
+        findByState('prepare_shots') ??
+        findByState('shoot') ??
+        chaptersByIndex[0]
+      const state = getChapterPreparationState(chapter)
+      return {
+        key: state.key,
+        stageText: state.text,
+        stageColor: state.color,
+        nextActionLabel: state.primaryAction,
+        nextActionHint: `第${chapter.index}章 · ${state.hint}`,
+        chapterId: chapter.id,
+        storyboardCount: chapter.storyboardCount,
+      }
+    }
+
+    const loadSummaries = async () => {
+      try {
+        if (useMock) {
+          const chapterGroups = Object.fromEntries(
+            list.map((project) => [
+              project.id,
+              mockChapters
+                .filter((chapter) => chapter.projectId === project.id)
+                .map((chapter) => ({
+                  id: chapter.id,
+                  projectId: chapter.projectId,
+                  index: chapter.index,
+                  title: chapter.title,
+                  summary: chapter.summary ?? '',
+                  rawText: chapter.summary ?? '',
+                  storyboardCount: chapter.storyboardCount,
+                  status: chapter.status,
+                  updatedAt: chapter.updatedAt,
+                })),
+            ]),
+          )
+          setProjectStageMap(
+            Object.fromEntries(
+              Object.entries(chapterGroups).map(([projectId, chapters]) => [
+                projectId,
+                summarizeProjectChapters(chapters),
+              ]),
+            ),
+          )
+          const flowStatsEntries = await Promise.all(
+            Object.entries(chapterGroups).map(async ([projectId, chapters]) => [
+              projectId,
+              await loadProjectFlowStatsForChapters(chapters),
+            ] as const),
+          )
+          setProjectFlowStatsMap(Object.fromEntries(flowStatsEntries))
+          return
+        }
+
+        const chapterResponses = await Promise.all(
+          list.map(async (project) => {
+            const res = await StudioChaptersService.listChaptersApiV1StudioChaptersGet({
+              projectId: project.id,
+              page: 1,
+              pageSize: 100,
+            })
+            const items: ChapterRead[] = res.data?.items ?? []
+            return [
+              project.id,
+              summarizeProjectChapters(
+                items.map((chapter) => ({
+                  id: chapter.id,
+                  projectId: chapter.project_id,
+                  index: chapter.index,
+                  title: chapter.title,
+                  summary: chapter.summary ?? '',
+                  rawText: chapter.raw_text ?? '',
+                  storyboardCount: chapter.shot_count ?? chapter.storyboard_count ?? 0,
+                  status: chapter.status ?? 'draft',
+                  updatedAt: new Date().toISOString(),
+                })),
+              ),
+              items.map((chapter) => ({
+                id: chapter.id,
+                projectId: chapter.project_id,
+                index: chapter.index,
+                title: chapter.title,
+                summary: chapter.summary ?? '',
+                rawText: chapter.raw_text ?? '',
+                storyboardCount: chapter.shot_count ?? chapter.storyboard_count ?? 0,
+                status: chapter.status ?? 'draft',
+                updatedAt: new Date().toISOString(),
+              })),
+            ] as const
+          }),
+        )
+        setProjectStageMap(
+          Object.fromEntries(chapterResponses.map(([projectId, summary]) => [projectId, summary])),
+        )
+        const flowStatsEntries = await Promise.all(
+          chapterResponses.map(async ([projectId, _summary, chapters]) => [
+            projectId,
+            await loadProjectFlowStatsForChapters(chapters),
+          ] as const),
+        )
+        setProjectFlowStatsMap(Object.fromEntries(flowStatsEntries))
+      } catch {
+        setProjectStageMap({})
+        setProjectFlowStatsMap({})
+      }
+    }
+
+    void loadSummaries()
+  }, [projects, useMock])
+
   const filteredSorted = useMemo(() => {
     const list = Array.isArray(projects) ? projects : []
     const keyword = search.trim().toLowerCase()
@@ -140,21 +291,15 @@ const ProjectLobby: React.FC = () => {
       }
 
       if (filterTab === 'all') return true
-      if (filterTab === 'inProgress') return getProjectStatus(p) === 'inProgress'
-      if (filterTab === 'completed') return getProjectStatus(p) === 'completed'
-      if (filterTab === 'recent') return true
-      if (filterTab === 'mine') {
-        // 目前没有 owner 字段，暂时视为全部
-        return true
-      }
+      const stage = projectStageMap[p.id]
+      const flowStats = projectFlowStatsMap[p.id]
+      if (filterTab === 'editRaw') return stage?.key === 'edit_raw' || stage?.key === 'create_first_chapter'
+      if (filterTab === 'extractShots') return stage?.key === 'extract_shots'
+      if (filterTab === 'prepareShots') return stage?.key === 'prepare_shots'
+      if (filterTab === 'generating') return (flowStats?.generatingShots ?? 0) > 0
+      if (filterTab === 'ready') return (flowStats?.readyShots ?? 0) > 0
       return true
     })
-
-    if (filterTab === 'recent') {
-      next = [...next].sort((a, b) =>
-        b.updatedAt.localeCompare(a.updatedAt)
-      ).slice(0, 5)
-    }
 
     next.sort((a, b) => {
       let av: string | number = ''
@@ -181,7 +326,7 @@ const ProjectLobby: React.FC = () => {
     })
 
     return next
-  }, [projects, search, filterTab, sortKey, sortOrder])
+  }, [projects, search, filterTab, sortKey, sortOrder, projectStageMap, projectFlowStatsMap])
 
   const handleSelectProject = (id: string) => {
     setSelectedProjectId(id)
@@ -321,6 +466,39 @@ const ProjectLobby: React.FC = () => {
     return <Tag color="orange">进行中</Tag>
   }
 
+  const handlePrimaryAction = (project: Project, stageSummary?: ProjectStageSummary) => {
+    if (!stageSummary) {
+      navigate(`/projects/${project.id}`)
+      return
+    }
+    if (stageSummary.key === 'create_first_chapter') {
+      navigate(`/projects/${project.id}?tab=chapters&create=1`)
+      return
+    }
+    if (!stageSummary.chapterId) {
+      navigate(`/projects/${project.id}`)
+      return
+    }
+    if (stageSummary.key === 'edit_raw') {
+      navigate(`/projects/${project.id}?tab=chapters&edit=${stageSummary.chapterId}`)
+      return
+    }
+    if (stageSummary.key === 'extract_shots') {
+      navigate(getChapterShotsPath(project.id, stageSummary.chapterId))
+      return
+    }
+    if (stageSummary.key === 'prepare_shots') {
+      navigate(getChapterStudioPath(project.id, stageSummary.chapterId))
+      return
+    }
+    void ensureHasShotsBeforeShooting({
+      projectId: project.id,
+      chapterId: stageSummary.chapterId,
+      storyboardCount: stageSummary.storyboardCount,
+      navigate,
+    })
+  }
+
   /**
    * 根据项目 ID 生成稳定的浅色渐变背景，避免深色背景。
    */
@@ -348,12 +526,9 @@ const ProjectLobby: React.FC = () => {
 
   const renderCard = (p: Project) => {
     const status = getProjectStatus(p)
-    const mainActionLabel =
-      status === 'completed'
-        ? '继续剪辑'
-        : p.progress > 0
-          ? '继续拍摄'
-          : '进入项目'
+    const stageSummary = projectStageMap[p.id]
+    const flowStats = projectFlowStatsMap[p.id]
+    const mainActionLabel = stageSummary?.nextActionLabel ?? (status === 'completed' ? '继续剪辑' : p.progress > 0 ? '继续拍摄' : '进入项目')
 
     const isSelected = selectedProject && selectedProject.id === p.id
     const isChecked = selectedIds.includes(p.id)
@@ -411,6 +586,29 @@ const ProjectLobby: React.FC = () => {
           {p.description}
         </p>
 
+        <div className="mb-2 rounded-md border border-gray-100 bg-gray-50 px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-gray-500">当前阶段</span>
+            <Tag color={stageSummary?.stageColor ?? 'default'} className="mr-0">
+              {stageSummary?.stageText ?? '待推进'}
+            </Tag>
+          </div>
+          <div className="mt-1 text-[11px] text-gray-600 line-clamp-2 min-h-[2rem]">
+            {stageSummary?.nextActionHint ?? '进入项目工作台后继续推进主流程'}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            <Tag bordered={false} color="gold" className="mr-0 text-[11px]">
+              待确认 {flowStats?.pendingConfirmShots ?? 0}
+            </Tag>
+            <Tag bordered={false} color="green" className="mr-0 text-[11px]">
+              已就绪 {flowStats?.readyShots ?? 0}
+            </Tag>
+            <Tag bordered={false} color="processing" className="mr-0 text-[11px]">
+              生成中 {flowStats?.generatingShots ?? 0}
+            </Tag>
+          </div>
+        </div>
+
         <div className="mb-2">
           <div className="flex justify-between text-[11px] mb-0.5 text-gray-500">
             <span>进度</span>
@@ -446,7 +644,7 @@ const ProjectLobby: React.FC = () => {
               type="primary"
               size="small"
               icon={<EnterOutlined />}
-              onClick={() => navigate(`/projects/${p.id}`)}
+              onClick={() => handlePrimaryAction(p, stageSummary)}
             >
               {mainActionLabel}
             </Button>
@@ -494,32 +692,39 @@ const ProjectLobby: React.FC = () => {
                 全部
               </Button>
               <Button
-                type={filterTab === 'inProgress' ? 'primary' : 'text'}
+                type={filterTab === 'editRaw' ? 'primary' : 'text'}
                 size="small"
-                onClick={() => setFilterTab('inProgress')}
+                onClick={() => setFilterTab('editRaw')}
               >
-                进行中
+                待补原文
               </Button>
               <Button
-                type={filterTab === 'completed' ? 'primary' : 'text'}
+                type={filterTab === 'extractShots' ? 'primary' : 'text'}
                 size="small"
-                onClick={() => setFilterTab('completed')}
+                onClick={() => setFilterTab('extractShots')}
               >
-                已完成
+                待提取分镜
               </Button>
               <Button
-                type={filterTab === 'mine' ? 'primary' : 'text'}
+                type={filterTab === 'prepareShots' ? 'primary' : 'text'}
                 size="small"
-                onClick={() => setFilterTab('mine')}
+                onClick={() => setFilterTab('prepareShots')}
               >
-                我创建的
+                待准备镜头
               </Button>
               <Button
-                type={filterTab === 'recent' ? 'primary' : 'text'}
+                type={filterTab === 'generating' ? 'primary' : 'text'}
                 size="small"
-                onClick={() => setFilterTab('recent')}
+                onClick={() => setFilterTab('generating')}
               >
-                最近打开
+                生成中
+              </Button>
+              <Button
+                type={filterTab === 'ready' ? 'primary' : 'text'}
+                size="small"
+                onClick={() => setFilterTab('ready')}
+              >
+                可继续推进
               </Button>
             </Space>
           </Space>

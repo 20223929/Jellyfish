@@ -8,10 +8,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import JSON, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -42,6 +43,13 @@ class GenerationTask(Base, TimestampMixin):
         nullable=False,
         index=True,
         comment="交付方式：streaming / async_polling / ...",
+    )
+    task_kind: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="generic",
+        index=True,
+        comment="业务任务类型：用于执行器路由，如 script_divide / video_generation / image_generation",
     )
     status: Mapped[GenerationTaskStatus] = mapped_column(
         String(32),
@@ -74,10 +82,51 @@ class GenerationTask(Base, TimestampMixin):
         default="",
         comment="失败原因（为空表示无错误）",
     )
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="是否已请求取消",
+    )
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="请求取消时间",
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="任务开始执行时间",
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="任务结束时间（成功 / 失败 / 取消）",
+    )
+    cancel_reason: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="取消原因",
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="实际取消完成时间",
+    )
+    executor_type: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="执行器类型：如 celery",
+    )
+    executor_task_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        comment="执行器侧任务 ID，如 celery task id",
+    )
 
     __table_args__ = (
         # 轮询高频：按 id 主键读最常见；列表/后台清理可按状态与更新时间过滤
         Index("ix_generation_tasks_status_updated_at", "status", "updated_at"),
         Index("ix_generation_tasks_mode_updated_at", "mode", "updated_at"),
+        Index("ix_generation_tasks_status_cancel_requested", "status", "cancel_requested"),
     )
-

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Card, Collapse, Empty, Input, List, Modal, Space, Spin, Tag, message } from 'antd'
 import {
+  CloseCircleOutlined,
   DiffOutlined,
   FileTextOutlined,
   HistoryOutlined,
@@ -10,6 +11,17 @@ import {
 } from '@ant-design/icons'
 import { ScriptProcessingService, StudioChaptersService } from '../../../../services/generated'
 import type { ScriptConsistencyCheckResult } from '../../../../services/generated'
+import {
+  CONSISTENCY_CHECK_RELATION_TYPE,
+  SCRIPT_OPTIMIZATION_RELATION_TYPE,
+  SCRIPT_SIMPLIFICATION_RELATION_TYPE,
+  useCancelableRelationTask,
+} from '../../project/ProjectWorkbench/chapterDivisionTasks'
+import { executeAsyncTaskCreate, executeTaskCancel, notifyExistingTask } from '../../components/taskActionHelpers'
+import { handleTaskResultSafely } from '../../components/taskResultHelpers'
+import { useRelationTaskNotification } from '../../components/taskNotificationHelpers'
+import { useTaskPageContext } from '../../components/taskPageContext'
+import { TASK_COPY } from '../../components/taskCopy'
 
 type EditorMode = 'raw' | 'condensed' | 'compare'
 
@@ -31,6 +43,9 @@ export function ChapterRawTextEditorModal({
   chapterId: string | undefined
   onSaved?: (next: { rawText?: string; condensedText?: string }) => void
 }) {
+  const consistencyTaskCopy = TASK_COPY.consistencyCheck
+  const simplifyTaskCopy = TASK_COPY.scriptSimplify
+  const optimizeTaskCopy = TASK_COPY.scriptOptimize
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [extracting, setExtracting] = useState(false)
@@ -48,9 +63,126 @@ export function ChapterRawTextEditorModal({
   const [compareCondensed, setCompareCondensed] = useState('')
   const [consistencyResult, setConsistencyResult] = useState<ScriptConsistencyCheckResult | null>(null)
 
+  const applyConsistencyTaskResult = useCallback(async (taskId: string) => {
+    await handleTaskResultSafely(taskId, {
+      readErrorMessage: '读取一致性检查结果失败',
+      failedFallbackMessage: '一致性检查失败',
+      onSucceeded: (resultValue) => {
+        setConsistencyResult(resultValue as ScriptConsistencyCheckResult)
+        const result = resultValue as Record<string, any>
+        if (result?.has_issues) {
+          message.warning(`发现 ${Array.isArray(result.issues) ? result.issues.length : 0} 个角色混淆问题`)
+        } else {
+          message.success('未发现角色混淆问题')
+        }
+      },
+      onFailed: (errorMessage) => {
+        message.error(errorMessage)
+      },
+      onReadError: () => {
+        message.error('读取一致性检查结果失败')
+      },
+    })
+  }, [])
+
+  const applySimplifyResult = useCallback(async (taskId: string) => {
+    await handleTaskResultSafely(taskId, {
+      readErrorMessage: '读取智能精简结果失败',
+      failedFallbackMessage: '智能精简失败',
+      onSucceeded: (resultValue) => {
+        const result = resultValue as Record<string, any>
+        const simplified = String(result?.simplified_script_text ?? '').trim()
+        if (!simplified) {
+          message.error('智能精简失败：未返回有效内容')
+          return
+        }
+        setCondensedText(simplified)
+        if (mode === 'compare') {
+          setCompareCondensed(simplified)
+        } else {
+          setMode('condensed')
+          setEditorText(simplified)
+        }
+        message.success('智能精简完成')
+      },
+      onFailed: (errorMessage) => {
+        message.error(errorMessage)
+      },
+      onReadError: () => {
+        message.error('读取智能精简结果失败')
+      },
+    })
+  }, [mode])
+
+  const applyOptimizeResult = useCallback(async (taskId: string) => {
+    await handleTaskResultSafely(taskId, {
+      readErrorMessage: '读取一键优化结果失败',
+      failedFallbackMessage: '一键优化失败',
+      onSucceeded: (resultValue) => {
+        const result = resultValue as Record<string, any>
+        const optimized = String(result?.optimized_script_text ?? '').trim()
+        if (!optimized) {
+          message.error('一键优化失败：未返回有效内容')
+          return
+        }
+        setRawText(optimized)
+        setEditorText(optimized)
+        setMode('raw')
+        setCompareRaw(optimized)
+        message.success('一键优化完成')
+      },
+      onFailed: (errorMessage) => {
+        message.error(errorMessage)
+      },
+      onReadError: () => {
+        message.error('读取一键优化结果失败')
+      },
+    })
+  }, [])
+
+  const { task: consistencyTask, settledTask: consistencySettledTask, trackTaskData: trackConsistencyTaskData, applyCancelData: applyConsistencyCancelData } = useCancelableRelationTask({
+    enabled: open && !!chapterId,
+    relationType: CONSISTENCY_CHECK_RELATION_TYPE,
+    relationEntityId: chapterId,
+    onTaskSettled: applyConsistencyTaskResult,
+  })
+
+  const { task: simplifyTask, settledTask: simplifySettledTask, trackTaskData: trackSimplifyTaskData, applyCancelData: applySimplifyCancelData } = useCancelableRelationTask({
+    enabled: open && !!chapterId,
+    relationType: SCRIPT_SIMPLIFICATION_RELATION_TYPE,
+    relationEntityId: chapterId,
+    onTaskSettled: applySimplifyResult,
+  })
+
+  const { task: optimizeTask, settledTask: optimizeSettledTask, trackTaskData: trackOptimizeTaskData, applyCancelData: applyOptimizeCancelData } = useCancelableRelationTask({
+    enabled: open && !!chapterId,
+    relationType: SCRIPT_OPTIMIZATION_RELATION_TYPE,
+    relationEntityId: chapterId,
+    onTaskSettled: applyOptimizeResult,
+  })
+  useTaskPageContext(
+    open && chapterId
+      ? [
+          {
+            relationType: CONSISTENCY_CHECK_RELATION_TYPE,
+            relationEntityId: chapterId,
+          },
+          {
+            relationType: SCRIPT_SIMPLIFICATION_RELATION_TYPE,
+            relationEntityId: chapterId,
+          },
+          {
+            relationType: SCRIPT_OPTIMIZATION_RELATION_TYPE,
+            relationEntityId: chapterId,
+          },
+        ]
+      : [],
+  )
+
   const plainWordCount = useMemo(() => editorText.trim().length, [editorText])
   const paragraphCount = useMemo(() => editorText.split(/\n\s*\n/).filter((p) => p.trim()).length, [editorText])
-  const actionsLoading = extracting || checkingConsistency || optimizingScript
+  const actionsLoading =
+    extracting || checkingConsistency || optimizingScript || !!simplifyTask || !!optimizeTask || !!consistencyTask
   const consistencyIssues = useMemo(() => {
     const list = (consistencyResult?.issues as any[] | undefined) ?? []
     return Array.isArray(list) ? list : []
@@ -86,29 +218,29 @@ export function ChapterRawTextEditorModal({
       message.warning('请先输入原文')
       return
     }
+    if (notifyExistingTask(simplifyTask, {
+      cancellingMessage: simplifyTaskCopy.cancellingMessage,
+      runningMessage: simplifyTaskCopy.runningMessage,
+    })) {
+      return
+    }
     setExtracting(true)
     try {
-      const res = await ScriptProcessingService.simplifyScriptApiV1ScriptProcessingSimplifyScriptPost({
-        requestBody: {
-          script_text: rawText,
-        },
+      await executeAsyncTaskCreate({
+        request: () =>
+          ScriptProcessingService.simplifyScriptAsyncApiV1ScriptProcessingSimplifyScriptAsyncPost({
+            requestBody: {
+              chapter_id: chapterId ?? null,
+              script_text: rawText,
+            },
+          }),
+        trackTaskData: trackSimplifyTaskData,
+        startedMessage: simplifyTaskCopy.startedMessage,
+        reusedMessage: simplifyTaskCopy.reusedMessage,
+        fallbackErrorMessage: '智能精简失败',
       })
-      const simplified = res.data?.simplified_script_text?.trim() ?? ''
-      if (!simplified) {
-        message.error('智能精简失败：未返回有效内容')
-        return
-      }
-      setCondensedText(simplified)
-      if (mode === 'compare') {
-        // 对比模式下不切换编辑区：只更新右侧精简内容输入框
-        setCompareCondensed(simplified)
-      } else {
-        setMode('condensed')
-        setEditorText(simplified)
-      }
-      message.success('智能精简完成')
     } catch {
-      message.error('智能精简失败')
+      // executeAsyncTaskCreate 已统一处理错误提示
     } finally {
       setExtracting(false)
     }
@@ -120,23 +252,44 @@ export function ChapterRawTextEditorModal({
       message.warning('请先输入原文')
       return
     }
+    if (notifyExistingTask(consistencyTask, {
+      cancellingMessage: consistencyTaskCopy.cancellingMessage,
+      runningMessage: consistencyTaskCopy.runningMessage,
+    })) {
+      return
+    }
     setCheckingConsistency(true)
     try {
-      const res = await ScriptProcessingService.checkConsistencyApiV1ScriptProcessingCheckConsistencyPost({
-        requestBody: { script_text: scriptText },
+      await executeAsyncTaskCreate({
+        request: () =>
+          ScriptProcessingService.checkConsistencyAsyncApiV1ScriptProcessingCheckConsistencyAsyncPost({
+            requestBody: { script_text: scriptText, chapter_id: chapterId ?? null },
+          }),
+        trackTaskData: trackConsistencyTaskData,
+        startedMessage: consistencyTaskCopy.startedMessage,
+        reusedMessage: consistencyTaskCopy.reusedMessage,
+        fallbackErrorMessage: '一致性检查失败',
       })
-      const data = res.data
-      if (!data) {
-        message.error(res.message || '一致性检查失败')
-        return
-      }
-      setConsistencyResult(data)
-      if (data.has_issues) message.warning(`发现 ${data.issues?.length ?? 0} 个角色混淆问题`)
-      else message.success('未发现角色混淆问题')
-    } catch (e: any) {
-      message.error(e?.message || '一致性检查失败')
+    } catch {
+      // executeAsyncTaskCreate 已统一处理错误提示
     } finally {
       setCheckingConsistency(false)
+    }
+  }
+
+  const handleCancelConsistencyTask = async () => {
+    if (!consistencyTask?.taskId) return
+    try {
+      await executeTaskCancel({
+        taskId: consistencyTask.taskId,
+        reason: '用户在原文编辑弹窗取消一致性检查任务',
+        applyCancelData: applyConsistencyCancelData,
+        cancelledImmediatelyMessage: consistencyTaskCopy.cancelledImmediatelyMessage,
+        cancelRequestedMessage: consistencyTaskCopy.cancelRequestedMessage,
+        fallbackErrorMessage: '取消一致性检查任务失败',
+      })
+    } catch {
+      // executeTaskCancel 已统一处理错误提示
     }
   }
 
@@ -150,31 +303,105 @@ export function ChapterRawTextEditorModal({
       message.info('请先进行角色混淆检查')
       return
     }
+    if (notifyExistingTask(optimizeTask, {
+      cancellingMessage: optimizeTaskCopy.cancellingMessage,
+      runningMessage: optimizeTaskCopy.runningMessage,
+    })) {
+      return
+    }
     setOptimizingScript(true)
     try {
-      const res = await ScriptProcessingService.optimizeScriptApiV1ScriptProcessingOptimizeScriptPost({
-        requestBody: {
-          script_text: scriptText,
-          consistency: consistencyResult as any,
-        },
+      await executeAsyncTaskCreate({
+        request: () =>
+          ScriptProcessingService.optimizeScriptAsyncApiV1ScriptProcessingOptimizeScriptAsyncPost({
+            requestBody: {
+              chapter_id: chapterId ?? null,
+              script_text: scriptText,
+              consistency: consistencyResult as any,
+            },
+          }),
+        trackTaskData: trackOptimizeTaskData,
+        startedMessage: optimizeTaskCopy.startedMessage,
+        reusedMessage: optimizeTaskCopy.reusedMessage,
+        fallbackErrorMessage: '一键优化失败',
       })
-      const optimized = res.data?.optimized_script_text?.trim() ?? ''
-      if (!optimized) {
-        message.error(res.message || '一键优化失败')
-        return
-      }
-      // 优化后回写到主输入区（以原文视图承载）
-      setRawText(optimized)
-      setEditorText(optimized)
-      setMode('raw')
-      setCompareRaw(optimized)
-      message.success('一键优化完成')
-    } catch (e: any) {
-      message.error(e?.message || '一键优化失败')
+    } catch {
+      // executeAsyncTaskCreate 已统一处理错误提示
     } finally {
       setOptimizingScript(false)
     }
   }
+
+  const handleCancelSimplifyTask = async () => {
+    if (!simplifyTask?.taskId) return
+    try {
+      await executeTaskCancel({
+        taskId: simplifyTask.taskId,
+        reason: '用户在原文编辑弹窗取消智能精简任务',
+        applyCancelData: applySimplifyCancelData,
+        cancelledImmediatelyMessage: simplifyTaskCopy.cancelledImmediatelyMessage,
+        cancelRequestedMessage: simplifyTaskCopy.cancelRequestedMessage,
+        fallbackErrorMessage: '取消智能精简任务失败',
+      })
+    } catch {
+      // executeTaskCancel 已统一处理错误提示
+    }
+  }
+
+  const handleCancelOptimizeTask = async () => {
+    if (!optimizeTask?.taskId) return
+    try {
+      await executeTaskCancel({
+        taskId: optimizeTask.taskId,
+        reason: '用户在原文编辑弹窗取消一键优化任务',
+        applyCancelData: applyOptimizeCancelData,
+        cancelledImmediatelyMessage: optimizeTaskCopy.cancelledImmediatelyMessage,
+        cancelRequestedMessage: optimizeTaskCopy.cancelRequestedMessage,
+        fallbackErrorMessage: '取消一键优化任务失败',
+      })
+    } catch {
+      // executeTaskCancel 已统一处理错误提示
+    }
+  }
+
+  useRelationTaskNotification({
+    task: consistencyTask,
+    settledTask: consistencySettledTask,
+    title: consistencyTaskCopy.title,
+    sourceLabel: '章节原文编辑',
+    runningDescription: consistencyTaskCopy.runningDescription,
+    cancellingDescription: consistencyTaskCopy.cancellingDescription,
+    successDescription: consistencyTaskCopy.successDescription,
+    cancelledDescription: consistencyTaskCopy.cancelledDescription,
+    failedDescription: consistencyTaskCopy.failedDescription,
+    onCancel: consistencyTask ? () => void handleCancelConsistencyTask() : null,
+  })
+
+  useRelationTaskNotification({
+    task: simplifyTask,
+    settledTask: simplifySettledTask,
+    title: simplifyTaskCopy.title,
+    sourceLabel: '章节原文编辑',
+    runningDescription: simplifyTaskCopy.runningDescription,
+    cancellingDescription: simplifyTaskCopy.cancellingDescription,
+    successDescription: simplifyTaskCopy.successDescription,
+    cancelledDescription: simplifyTaskCopy.cancelledDescription,
+    failedDescription: simplifyTaskCopy.failedDescription,
+    onCancel: simplifyTask ? () => void handleCancelSimplifyTask() : null,
+  })
+
+  useRelationTaskNotification({
+    task: optimizeTask,
+    settledTask: optimizeSettledTask,
+    title: optimizeTaskCopy.title,
+    sourceLabel: '章节原文编辑',
+    runningDescription: optimizeTaskCopy.runningDescription,
+    cancellingDescription: optimizeTaskCopy.cancellingDescription,
+    successDescription: optimizeTaskCopy.successDescription,
+    cancelledDescription: optimizeTaskCopy.cancelledDescription,
+    failedDescription: optimizeTaskCopy.failedDescription,
+    onCancel: optimizeTask ? () => void handleCancelOptimizeTask() : null,
+  })
 
   const handleBackToRaw = () => {
     setMode('raw')
@@ -300,21 +527,43 @@ export function ChapterRawTextEditorModal({
               <Button
                 size="small"
                 icon={<ReloadOutlined />}
-                loading={actionsLoading}
-                disabled={actionsLoading}
+                loading={checkingConsistency || !!consistencyTask}
+                disabled={actionsLoading || !!consistencyTask}
                 onClick={() => void handleCheckConsistency()}
               >
-                角色混淆检查
+                {consistencyTask ? '检查中' : '角色混淆检查'}
               </Button>
+              {consistencyTask ? (
+                <Button
+                  size="small"
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  disabled={consistencyTask.cancelRequested}
+                  onClick={() => void handleCancelConsistencyTask()}
+                >
+                  {consistencyTask.cancelRequested ? '正在取消' : '取消检查'}
+                </Button>
+              ) : null}
               <Button
                 size="small"
                 icon={<ThunderboltOutlined />}
-                loading={actionsLoading}
-                disabled={actionsLoading}
+                loading={extracting || !!simplifyTask}
+                disabled={actionsLoading || !!simplifyTask}
                 onClick={() => void handleSmartSimplify()}
               >
-                智能精简
+                {simplifyTask ? '精简中' : '智能精简'}
               </Button>
+              {simplifyTask ? (
+                <Button
+                  size="small"
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  disabled={simplifyTask.cancelRequested}
+                  onClick={() => void handleCancelSimplifyTask()}
+                >
+                  {simplifyTask.cancelRequested ? '正在取消' : '取消精简'}
+                </Button>
+              ) : null}
               {mode === 'condensed' ? (
                 <Button size="small" icon={<ReloadOutlined />} loading={actionsLoading} disabled={actionsLoading} onClick={handleBackToRaw}>
                   回到原文
@@ -426,12 +675,23 @@ export function ChapterRawTextEditorModal({
                       size="small"
                       type="primary"
                       icon={<ThunderboltOutlined />}
-                      loading={actionsLoading}
-                      disabled={actionsLoading}
+                      loading={optimizingScript || !!optimizeTask}
+                      disabled={actionsLoading || !!optimizeTask}
                       onClick={() => void handleOneClickOptimize()}
                     >
-                      一键优化
+                      {optimizeTask ? '优化中' : '一键优化'}
                     </Button>
+                    {optimizeTask ? (
+                      <Button
+                        size="small"
+                        danger
+                        icon={<CloseCircleOutlined />}
+                        disabled={optimizeTask.cancelRequested}
+                        onClick={() => void handleCancelOptimizeTask()}
+                      >
+                        {optimizeTask.cancelRequested ? '正在取消' : '取消优化'}
+                      </Button>
+                    ) : null}
                   </Space>
                 }
               >
@@ -533,4 +793,3 @@ export function ChapterRawTextEditorModal({
     </>
   )
 }
-

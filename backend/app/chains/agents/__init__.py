@@ -13,7 +13,6 @@ from app.chains.agents.variant_analyzer_agent import VariantAnalyzerAgent
 from app.chains.agents.consistency_checker_agent import ConsistencyCheckerAgent
 from app.chains.agents.script_optimizer_agent import ScriptOptimizerAgent
 from app.chains.agents.script_simplifier_agent import ScriptSimplifierAgent
-from app.chains.agents.output_compiler_agent import OutputCompilerAgent
 from app.chains.agents.character_portrait_analysis_agent import CharacterPortraitAnalysisAgent
 from app.chains.agents.prop_info_analysis_agent import PropInfoAnalysisAgent
 from app.chains.agents.scene_info_analysis_agent import SceneInfoAnalysisAgent
@@ -32,7 +31,6 @@ __all__ = [
     "ConsistencyCheckerAgent",
     "ScriptOptimizerAgent",
     "ScriptSimplifierAgent",
-    "OutputCompilerAgent",
     "CharacterPortraitAnalysisAgent",
     "PropInfoAnalysisAgent",
     "SceneInfoAnalysisAgent",

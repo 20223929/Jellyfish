@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,6 +16,7 @@ from app.models.studio import (
     ShotFrameType,
     ShotCandidateStatus,
     ShotCandidateType,
+    ShotDialogueCandidateStatus,
     ShotStatus,
     VFXType,
 )
@@ -35,6 +37,22 @@ class ShotBase(BaseModel):
     )
 
 
+class ShotExtractionSummaryRead(BaseModel):
+    state: Literal[
+        "not_extracted",
+        "extracted_empty",
+        "extracted_pending",
+        "extracted_resolved",
+        "skipped",
+    ] = Field(..., description="镜头提取确认状态摘要")
+    has_extracted: bool = Field(..., description="是否已执行过提取")
+    last_extracted_at: datetime | None = Field(None, description="最近一次提取完成时间")
+    asset_candidate_total: int = Field(0, description="资产候选总数")
+    dialogue_candidate_total: int = Field(0, description="对白候选总数")
+    pending_asset_count: int = Field(0, description="待确认资产候选数")
+    pending_dialogue_count: int = Field(0, description="待确认对白候选数")
+
+
 class ShotCreate(ShotBase):
     pass
 
@@ -51,6 +69,8 @@ class ShotUpdate(BaseModel):
 
 
 class ShotRead(ShotBase):
+    last_extracted_at: datetime | None = Field(None, description="最近一次完成信息提取的时间")
+    extraction: ShotExtractionSummaryRead = Field(..., description="镜头提取状态摘要")
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -71,6 +91,33 @@ class ShotExtractedCandidateRead(BaseModel):
     candidate_name: str = Field(..., description="提取出的候选名称")
     candidate_status: ShotCandidateStatus = Field(..., description="候选确认状态")
     linked_entity_id: str | None = Field(None, description="已关联实体 ID")
+    source: str = Field(..., description="候选来源")
+    payload: dict = Field(default_factory=dict, description="候选附加信息")
+    confirmed_at: datetime | None = Field(None, description="确认时间")
+    created_at: datetime = Field(..., description="创建时间")
+    updated_at: datetime = Field(..., description="更新时间")
+
+
+class ShotExtractedDialogueCandidateAcceptRequest(BaseModel):
+    index: int | None = Field(None, description="写入对白行时使用的排序；为空则使用候选排序")
+    text: str | None = Field(None, description="接受时可覆盖对白文本")
+    line_mode: DialogueLineMode | None = Field(None, description="接受时可覆盖对白模式")
+    speaker_name: str | None = Field(None, description="接受时可覆盖说话角色名称")
+    target_name: str | None = Field(None, description="接受时可覆盖听者角色名称")
+
+
+class ShotExtractedDialogueCandidateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="对白候选项 ID")
+    shot_id: str = Field(..., description="所属镜头 ID")
+    index: int = Field(..., description="镜头内对白候选排序")
+    text: str = Field(..., description="提取出的对白文本")
+    line_mode: DialogueLineMode = Field(..., description="对白模式")
+    speaker_name: str | None = Field(None, description="说话角色名称")
+    target_name: str | None = Field(None, description="听者角色名称")
+    candidate_status: ShotDialogueCandidateStatus = Field(..., description="对白候选确认状态")
+    linked_dialog_line_id: int | None = Field(None, description="已接受后关联的对白行 ID")
     source: str = Field(..., description="候选来源")
     payload: dict = Field(default_factory=dict, description="候选附加信息")
     confirmed_at: datetime | None = Field(None, description="确认时间")
@@ -295,3 +342,125 @@ class ShotAssetsOverviewRead(BaseModel):
     status: ShotStatus = Field(..., description="镜头流程状态")
     summary: ShotAssetsOverviewSummary = Field(..., description="总览统计")
     items: list[ShotAssetOverviewItem] = Field(default_factory=list, description="资产总览项")
+
+
+class ShotPreparationLinkEntityType(str, Enum):
+    character = "character"
+    scene = "scene"
+    prop = "prop"
+    costume = "costume"
+
+
+class ShotPreparationLinkRequest(BaseModel):
+    project_id: str = Field(..., description="项目 ID")
+    chapter_id: str = Field(..., description="章节 ID")
+    entity_type: ShotPreparationLinkEntityType = Field(..., description="准备页关联的实体类型")
+    linked_entity_id: str = Field(..., description="要关联的实体 ID")
+
+
+class ShotPreparationStateRead(BaseModel):
+    """分镜准备页聚合状态。"""
+
+    shot: ShotRead = Field(..., description="当前镜头最新状态")
+    assets_overview: ShotAssetsOverviewRead = Field(..., description="资产确认区聚合状态")
+    dialogue_candidates: list[ShotExtractedDialogueCandidateRead] = Field(
+        default_factory=list,
+        description="当前待处理/已存在的对白候选",
+    )
+    saved_dialogue_lines: list[ShotDialogLineRead] = Field(
+        default_factory=list,
+        description="当前已保存的对白行",
+    )
+    pending_confirm_count: int = Field(..., description="当前仍待确认的总数量（资产 + 对白）")
+    ready_for_generation: bool = Field(..., description="当前镜头是否已完成准备，可进入后续生成")
+
+
+class ShotPreparationMutationAction(str, Enum):
+    link_asset_candidate = "link_asset_candidate"
+    ignore_asset_candidate = "ignore_asset_candidate"
+    accept_dialogue_candidate = "accept_dialogue_candidate"
+    ignore_dialogue_candidate = "ignore_dialogue_candidate"
+    skip_extraction = "skip_extraction"
+    resume_extraction = "resume_extraction"
+
+
+class ShotPreparationMutationResultRead(BaseModel):
+    """准备页命令执行后的统一响应。"""
+
+    action: ShotPreparationMutationAction = Field(..., description="本次执行的准备页动作")
+    state: ShotPreparationStateRead = Field(..., description="动作完成后的最新准备页聚合状态")
+
+
+class ShotPromptAssetRef(BaseModel):
+    """用于提示词渲染的镜头资产引用。"""
+
+    type: ShotLinkedAssetType = Field(..., description="资产类型")
+    name: str = Field(..., description="资产名称")
+    description: str = Field("", description="资产描述或提取候选描述")
+    file_id: str | None = Field(None, description="可作为参考图的文件 ID")
+    thumbnail: str | None = Field(None, description="缩略图")
+
+
+class ShotPromptCameraInfo(BaseModel):
+    """用于提示词渲染的镜头语言信息。"""
+
+    camera_shot: str = Field("", description="景别")
+    angle: str = Field("", description="机位角度")
+    movement: str = Field("", description="运镜方式")
+    duration: int | None = Field(None, description="镜头时长（秒）")
+
+
+class ShotVideoPromptPackRead(BaseModel):
+    """视频提示词渲染前的标准上下文包。"""
+
+    shot_id: str = Field(..., description="镜头 ID")
+    title: str = Field("", description="镜头标题")
+    script_excerpt: str = Field("", description="剧本摘录")
+    action_beats: list[str] = Field(default_factory=list, description="动作/场景要点")
+    dialogue_summary: str = Field("", description="对白摘要")
+    characters: list[ShotPromptAssetRef] = Field(default_factory=list, description="角色引用")
+    scene: ShotPromptAssetRef | None = Field(None, description="场景引用")
+    props: list[ShotPromptAssetRef] = Field(default_factory=list, description="道具引用")
+    costumes: list[ShotPromptAssetRef] = Field(default_factory=list, description="服装引用")
+    camera: ShotPromptCameraInfo = Field(default_factory=ShotPromptCameraInfo, description="镜头语言")
+    atmosphere: str = Field("", description="氛围描述")
+    visual_style: str = Field("", description="项目视觉风格")
+    style: str = Field("", description="项目题材/风格")
+    negative_prompt: str = Field("", description="默认负面提示词")
+
+
+class ShotVideoPromptPreviewRead(BaseModel):
+    """视频提示词预览结果。"""
+
+    shot_id: str = Field(..., description="镜头 ID")
+    template_id: str | None = Field(None, description="使用的提示词模板 ID")
+    template_name: str | None = Field(None, description="使用的提示词模板名称")
+    rendered_prompt: str = Field(..., description="渲染后的提示词")
+    pack: ShotVideoPromptPackRead = Field(..., description="渲染上下文包")
+    warnings: list[str] = Field(default_factory=list, description="渲染时发现的非阻塞提示")
+
+
+class ShotVideoReadinessCheck(BaseModel):
+    """单项视频生成准备度检查结果。"""
+
+    key: str = Field(..., description="检查项 key")
+    ok: bool = Field(..., description="是否通过")
+    message: str = Field(..., description="面向前端展示的说明")
+
+
+class ShotVideoReadinessRead(BaseModel):
+    """镜头视频生成准备度。"""
+
+    shot_id: str = Field(..., description="镜头 ID")
+    reference_mode: str = Field(..., description="参考模式")
+    ready: bool = Field(..., description="是否满足当前 reference_mode 下的视频生成条件")
+    checks: list[ShotVideoReadinessCheck] = Field(default_factory=list, description="准备度检查项")
+
+
+class ShotRuntimeSummaryRead(BaseModel):
+    shot_id: str = Field(..., description="镜头 ID")
+    has_active_tasks: bool = Field(..., description="是否存在进行中的关联任务")
+    has_active_video_tasks: bool = Field(..., description="是否存在进行中的视频任务")
+    has_active_prompt_tasks: bool = Field(..., description="是否存在进行中的提示词任务")
+    has_active_frame_tasks: bool = Field(..., description="是否存在进行中的分镜帧图片任务")
+    active_task_count: int = Field(..., description="进行中的唯一任务数")

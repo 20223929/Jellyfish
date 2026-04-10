@@ -9,9 +9,9 @@ from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.models.studio import Character, ShotDetail, ShotDialogLine
 from app.schemas.common import ApiResponse, PaginatedData, paginated_response
 from app.schemas.studio.shots import ShotDialogLineCreate, ShotDialogLineRead, ShotDialogLineUpdate
+from app.services.studio.shot_extracted_dialogue_candidates import mark_pending_by_linked_dialog_line
 from app.services.common import (
     create_and_refresh,
-    delete_if_exists,
     entity_not_found,
     flush_and_refresh,
     get_or_404,
@@ -52,6 +52,20 @@ async def list_paginated(
         page_size=page_size,
         total=total,
     )
+
+
+async def list_by_shot(
+    db: AsyncSession,
+    *,
+    shot_id: str,
+) -> list[ShotDialogLine]:
+    """按镜头读取全部已保存对白，供准备页聚合状态复用。"""
+    stmt = (
+        select(ShotDialogLine)
+        .where(ShotDialogLine.shot_detail_id == shot_id)
+        .order_by(ShotDialogLine.index.asc(), ShotDialogLine.id.asc())
+    )
+    return list((await db.execute(stmt)).scalars().all())
 
 
 async def create(
@@ -97,4 +111,10 @@ async def delete(
     line_id: int,
 ) -> None:
     """删除镜头对白。"""
-    await delete_if_exists(db, ShotDialogLine, line_id)
+    obj = await db.get(ShotDialogLine, line_id)
+    if obj is None:
+        return None
+    await mark_pending_by_linked_dialog_line(db, dialog_line_id=obj.id)
+    await db.delete(obj)
+    await db.flush()
+    return None

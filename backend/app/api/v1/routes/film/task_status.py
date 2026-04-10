@@ -10,12 +10,21 @@ from app.api.utils import apply_order, paginate
 from app.core.task_manager import SqlAlchemyTaskStore
 from app.core.task_manager.types import TaskStatus
 from app.dependencies import get_db
-from app.models.task import GenerationTask
 from app.models.task_links import GenerationTaskLink
 from app.schemas.common import ApiResponse, PaginatedData, created_response, empty_response, paginated_response, success_response
 from app.services.common import entity_not_found
+from app.tasks.execute_task import revoke_task_execution
 
-from .common import TaskLinkAdoptRead, TaskLinkAdoptRequest, TaskResultRead, TaskStatusRead, ensure_single_bind_target
+from .common import (
+    TaskCancelRead,
+    TaskCancelRequest,
+    TaskLinkAdoptRead,
+    TaskLinkAdoptRequest,
+    TaskListItemRead,
+    TaskResultRead,
+    TaskStatusRead,
+    ensure_single_bind_target,
+)
 
 router = APIRouter()
 TASK_LINK_ORDER_FIELDS = {"updated_at", "created_at", "id", "status"}
@@ -62,6 +71,61 @@ class GenerationTaskLinkRead(GenerationTaskLinkBase):
 
 
 @router.get(
+    "/tasks",
+    response_model=ApiResponse[PaginatedData[TaskListItemRead]],
+    summary="全局任务列表（任务中心）",
+)
+async def list_tasks(
+    db: AsyncSession = Depends(get_db),
+    statuses: list[TaskStatus] | None = Query(None, description="按任务状态过滤，可多选"),
+    task_kind: str | None = Query(None, description="按 task_kind 过滤"),
+    relation_type: str | None = Query(None, description="按 relation_type 过滤"),
+    relation_entity_id: str | None = Query(None, description="按 relation_entity_id 过滤"),
+    recent_seconds: int = Query(300, ge=0, le=86400, description="默认返回最近结束任务的时间窗口（秒）"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+) -> ApiResponse[PaginatedData[TaskListItemRead]]:
+    store = SqlAlchemyTaskStore(db)
+    items, total = await store.list_task_views(
+        statuses=statuses,
+        task_kind=task_kind,
+        relation_type=relation_type,
+        relation_entity_id=relation_entity_id,
+        recent_seconds=recent_seconds,
+        page=page,
+        page_size=page_size,
+    )
+    return paginated_response(
+        [
+            TaskListItemRead(
+                task_id=item.id,
+                task_kind=item.task_kind,
+                status=item.status,
+                progress=item.progress,
+                cancel_requested=item.cancel_requested,
+                cancel_requested_at_ts=item.cancel_requested_at_ts,
+                started_at_ts=item.started_at_ts,
+                finished_at_ts=item.finished_at_ts,
+                elapsed_ms=item.elapsed_ms,
+                created_at_ts=item.created_at_ts,
+                updated_at_ts=item.updated_at_ts,
+                executor_type=item.executor_type,
+                executor_task_id=item.executor_task_id,
+                relation_type=item.relation_type,
+                relation_entity_id=item.relation_entity_id,
+                resource_type=item.resource_type,
+                navigate_relation_type=item.navigate_relation_type,
+                navigate_relation_entity_id=item.navigate_relation_entity_id,
+            )
+            for item in items
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get(
     "/tasks/{task_id}/status",
     response_model=ApiResponse[TaskStatusRead],
     summary="查询任务状态/进度（轮询）",
@@ -74,7 +138,18 @@ async def get_task_status(
     view = await store.get_status_view(task_id)
     if view is None:
         raise HTTPException(status_code=404, detail=entity_not_found("Task"))
-    return success_response(TaskStatusRead(task_id=view.id, status=view.status, progress=view.progress))
+    return success_response(
+        TaskStatusRead(
+            task_id=view.id,
+            status=view.status,
+            progress=view.progress,
+            cancel_requested=view.cancel_requested,
+            cancel_requested_at_ts=view.cancel_requested_at_ts,
+            started_at_ts=view.started_at_ts,
+            finished_at_ts=view.finished_at_ts,
+            elapsed_ms=view.elapsed_ms,
+        )
+    )
 
 
 @router.get(
@@ -86,17 +161,53 @@ async def get_task_result(
     task_id: str,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[TaskResultRead]:
-    row = await db.get(GenerationTask, task_id)
-    if row is None:
+    store = SqlAlchemyTaskStore(db)
+    rec = await store.get(task_id)
+    if rec is None:
         raise HTTPException(status_code=404, detail=entity_not_found("Task"))
-    status_value = row.status.value if hasattr(row.status, "value") else str(row.status)
     return success_response(
         TaskResultRead(
-            task_id=row.id,
-            status=TaskStatus(status_value),
-            progress=int(row.progress),
-            result=row.result,
-            error=row.error or "",
+            task_id=rec.id,
+            status=rec.status,
+            progress=rec.progress,
+            result=rec.result,
+            error=rec.error,
+            cancel_requested=rec.cancel_requested,
+            cancel_requested_at_ts=rec.cancel_requested_at_ts,
+            started_at_ts=rec.started_at_ts,
+            finished_at_ts=rec.finished_at_ts,
+            elapsed_ms=rec.elapsed_ms,
+        )
+    )
+
+
+@router.post(
+    "/tasks/{task_id}/cancel",
+    response_model=ApiResponse[TaskCancelRead],
+    summary="请求取消任务",
+)
+async def cancel_task(
+    task_id: str,
+    body: TaskCancelRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[TaskCancelRead]:
+    store = SqlAlchemyTaskStore(db)
+    rec = await store.request_cancel(task_id, body.reason)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=entity_not_found("Task"))
+    effective_immediately = rec.status == TaskStatus.cancelled
+    if not effective_immediately and revoke_task_execution(task_id):
+        rec = await store.mark_cancelled(task_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=entity_not_found("Task"))
+        effective_immediately = True
+    return success_response(
+        TaskCancelRead(
+            task_id=rec.id,
+            status=rec.status,
+            cancel_requested=rec.cancel_requested,
+            cancel_requested_at_ts=rec.cancel_requested_at_ts,
+            effective_immediately=effective_immediately,
         )
     )
 
