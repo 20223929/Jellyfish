@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 from threading import Lock
@@ -47,4 +46,3 @@ def set_cached_script_extract(cache_key: str, result: StudioScriptExtractionDraf
 def clear_script_extract_cache() -> None:
     with _CACHE_LOCK:
         _SCRIPT_EXTRACT_CACHE.clear()
-

@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chains.agents.script_processing_agents import (
     EntityMergeResult,
-    ScriptConsistencyCheckResult,
     VariantAnalysisResult,
 )
 from app.core.db import async_session_maker
@@ -20,8 +19,7 @@ from app.core.task_manager.types import TaskStatus
 from app.dependencies import get_llm
 from app.models.task import GenerationTask, GenerationTaskStatus
 from app.models.task_links import GenerationTaskLink
-from app.services.common import entity_not_found
-from app.chains.agents import ConsistencyCheckerAgent, EntityMergerAgent, VariantAnalyzerAgent
+from app.chains.agents import EntityMergerAgent, VariantAnalyzerAgent
 
 
 logger = logging.getLogger(__name__)
