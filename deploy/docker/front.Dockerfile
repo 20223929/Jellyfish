@@ -3,7 +3,7 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 RUN corepack enable
-RUN corepack prepare pnpm@8.15.9 --activate
+RUN corepack prepare pnpm@9.15.9 --activate
 
 COPY front/package.json front/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -25,4 +25,3 @@ COPY --from=build /app/dist/ ./
 RUN printf 'window.__ENV = window.__ENV || {};\\n' > /usr/share/nginx/html/env.js
 
 EXPOSE 80
-

@@ -9,6 +9,7 @@
 
 BEGIN;
 
+
 SET @has_shots_skip_extraction = (
   SELECT COUNT(*)
   FROM information_schema.COLUMNS
