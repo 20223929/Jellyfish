@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import {
+  Alert,
   Layout,
   Input,
   Button,
@@ -35,7 +36,12 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons'
 import { LlmService } from '../../../services/generated/services/LlmService'
-import type { ModelRead, ModelCategoryKey, ProviderRead } from '../../../services/generated'
+import type {
+  ModelRead,
+  ModelCategoryKey,
+  ProviderRead,
+  ProviderSupportedRead,
+} from '../../../services/generated'
 import {
   MODEL_CATEGORIES,
   categoryLabelMap,
@@ -45,6 +51,7 @@ import {
 
 export default function ModelsTab() {
   const [providers, setProviders] = useState<ProviderRead[]>([])
+  const [supportedProviders, setSupportedProviders] = useState<ProviderSupportedRead[]>([])
   const [models, setModels] = useState<ModelRead[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -56,14 +63,16 @@ export default function ModelsTab() {
   const [categoryFilter, setCategoryFilter] = useState<ModelCategoryKey | null>(null)
   const [modelModalOpen, setModelModalOpen] = useState(false)
   const [modelEditing, setModelEditing] = useState<ModelRead | null>(null)
+  const [providerOptionsLoading, setProviderOptionsLoading] = useState(true)
   const [form] = Form.useForm()
+  const selectedFormCategory = Form.useWatch<ModelCategoryKey | undefined>('category', form)
   const { lg } = Grid.useBreakpoint()
   const isLargeScreen = lg ?? false
 
   const load = async () => {
     setLoading(true)
     try {
-      const [provRes, modelsRes] = await Promise.all([
+      const [provRes, modelsRes, supportedRes] = await Promise.all([
         LlmService.listProvidersApiV1LlmProvidersGet({ page: 1, pageSize: 100 }),
         LlmService.listModelsApiV1LlmModelsGet({
           q: search.trim() || undefined,
@@ -72,13 +81,16 @@ export default function ModelsTab() {
           page: 1,
           pageSize: 100,
         }),
+        LlmService.listSupportedProvidersApiV1LlmProvidersSupportedGet({}),
       ])
       setProviders(provRes.data?.items ?? [])
       setModels(modelsRes.data?.items ?? [])
+      setSupportedProviders(supportedRes.data ?? [])
     } catch {
       message.error('加载失败')
     } finally {
       setLoading(false)
+      setProviderOptionsLoading(false)
     }
   }
 
@@ -111,6 +123,60 @@ export default function ModelsTab() {
   )
 
   const getProviderName = (id: string) => providers.find((p) => p.id === id)?.name ?? id
+
+  const resolveProviderSpec = (providerName: string) =>
+    supportedProviders.find(
+      (spec) => spec.display_name === providerName || (spec.aliases?.length && spec.aliases.includes(providerName)),
+    )
+
+  const filteredProviderOptions = useMemo(() => {
+    if (!selectedFormCategory) return providers.map((p) => ({ label: p.name, value: p.id }))
+    return providers
+      .filter((provider) => {
+        const spec = resolveProviderSpec(provider.name)
+        return !!spec?.supported_categories?.includes(selectedFormCategory)
+      })
+      .map((p) => ({ label: p.name, value: p.id }))
+  }, [providers, selectedFormCategory, supportedProviders])
+
+  const editingUnsupportedProviderOption = useMemo(() => {
+    if (!modelEditing) return null
+    const provider = providers.find((p) => p.id === modelEditing.provider_id)
+    if (!provider) return null
+    const alreadyInOptions = filteredProviderOptions.some((opt) => opt.value === provider.id)
+    if (alreadyInOptions) return null
+    return {
+      label: `${provider.name}（历史/当前不支持所选类别）`,
+      value: provider.id,
+    }
+  }, [filteredProviderOptions, modelEditing, providers])
+
+  const providerSelectOptions = useMemo(
+    () =>
+      editingUnsupportedProviderOption
+        ? [editingUnsupportedProviderOption, ...filteredProviderOptions]
+        : filteredProviderOptions,
+    [editingUnsupportedProviderOption, filteredProviderOptions],
+  )
+  const unsupportedProviderWarning = useMemo(() => {
+    if (!editingUnsupportedProviderOption || !selectedFormCategory) return null
+    const provider = providers.find((p) => p.id === editingUnsupportedProviderOption.value)
+    if (!provider) return null
+    const categoryLabel = categoryLabelMap[selectedFormCategory]
+    return `当前模型绑定供应商「${provider.name}」不支持「${categoryLabel}」类别，保存前建议切换到支持该类别的供应商。`
+  }, [editingUnsupportedProviderOption, providers, selectedFormCategory])
+
+  useEffect(() => {
+    if (!selectedFormCategory) return
+    const providerId = form.getFieldValue('provider_id') as string | undefined
+    if (!providerId) return
+    const stillSupported = filteredProviderOptions.some((opt) => opt.value === providerId)
+    const keepHistoricalEditingProvider = modelEditing?.provider_id === providerId
+    if (!stillSupported && !keepHistoricalEditingProvider) {
+      form.setFieldsValue({ provider_id: undefined })
+      message.warning('当前供应商不支持所选模型类别，请重新选择')
+    }
+  }, [filteredProviderOptions, form, modelEditing, selectedFormCategory])
 
   const handleSaveModel = async () => {
     try {
@@ -615,10 +681,30 @@ export default function ModelsTab() {
             rules={[{ required: true, message: '请选择供应商' }]}
           >
             <Select
-              placeholder="选择供应商（请先添加供应商）"
-              options={providers.map((p) => ({ label: p.name, value: p.id }))}
+              loading={providerOptionsLoading}
+              placeholder={
+                selectedFormCategory
+                  ? `选择支持${categoryLabelMap[selectedFormCategory]}的供应商`
+                  : '选择供应商（请先添加供应商）'
+              }
+              options={providerSelectOptions}
+              notFoundContent={
+                providerOptionsLoading
+                  ? '加载中…'
+                  : selectedFormCategory
+                    ? '暂无支持该类别的供应商'
+                    : '暂无供应商'
+              }
             />
           </Form.Item>
+          {unsupportedProviderWarning && (
+            <Alert
+              type="warning"
+              showIcon
+              className="mb-4"
+              message={unsupportedProviderWarning}
+            />
+          )}
           <Form.Item name="params" label="参数（JSON）">
             <Input.TextArea rows={3} placeholder='{"max_tokens": 4096, "temperature": 0.7}' />
           </Form.Item>

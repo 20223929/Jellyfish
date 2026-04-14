@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fastapi import HTTPException
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -177,4 +178,76 @@ async def test_list_models_paginated_returns_filtered_items() -> None:
         assert resp.data is not None
         assert resp.data.pagination.total == 1
         assert [item.id for item in resp.data.items] == ["m2"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_model_rejects_unsupported_category_for_provider() -> None:
+    db, engine = await _build_session()
+    async with db:
+        await create_provider(
+            db,
+            body=ProviderCreate(
+                id="p-bailian",
+                name="阿里百炼",
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                api_key="k",
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_model(
+                db,
+                body=ModelCreate(
+                    id="m-video-invalid",
+                    name="qwen-vl-video",
+                    category=ModelCategoryKey.video,
+                    provider_id="p-bailian",
+                ),
+            )
+        assert exc_info.value.status_code == 400
+        assert "does not support category=video" in str(exc_info.value.detail)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_update_model_rejects_switch_to_unsupported_provider_category_combo() -> None:
+    db, engine = await _build_session()
+    async with db:
+        await create_provider(
+            db,
+            body=ProviderCreate(
+                id="p-openai",
+                name="OpenAI",
+                base_url="https://api.openai.com/v1",
+                api_key="k",
+            ),
+        )
+        await create_provider(
+            db,
+            body=ProviderCreate(
+                id="p-bailian",
+                name="阿里百炼",
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                api_key="k",
+            ),
+        )
+        await create_model(
+            db,
+            body=ModelCreate(
+                id="m-video-ok",
+                name="sora",
+                category=ModelCategoryKey.video,
+                provider_id="p-openai",
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await update_model(
+                db,
+                model_id="m-video-ok",
+                body=ModelUpdate(provider_id="p-bailian"),
+            )
+        assert exc_info.value.status_code == 400
+        assert "does not support category=video" in str(exc_info.value.detail)
     await engine.dispose()

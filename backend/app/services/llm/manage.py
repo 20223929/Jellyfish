@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +19,11 @@ from app.schemas.llm import (
     ProviderSupportedRead,
     ProviderUpdate,
 )
-from app.services.llm.provider_registry import list_registered_providers
+from app.services.llm.provider_registry import (
+    is_provider_category_supported,
+    list_registered_providers,
+    resolve_provider_key_from_name,
+)
 from app.bootstrap import bootstrap_all_registries
 from app.services.common import (
     create_and_refresh,
@@ -172,7 +177,14 @@ async def create_model(
         detail=entity_already_exists("Model"),
         status_code=400,
     )
-    await require_entity(db, Provider, body.provider_id, detail=entity_not_found("Provider"), status_code=400)
+    provider = await require_entity(
+        db,
+        Provider,
+        body.provider_id,
+        detail=entity_not_found("Provider"),
+        status_code=400,
+    )
+    _ensure_provider_supports_category(provider=provider, category=body.category)
     if body.is_default:
         await db.execute(update(Model).where(Model.category == body.category).values(is_default=False))
         await db.flush()
@@ -217,8 +229,17 @@ async def update_model(
             detail=entity_not_found("Provider"),
             status_code=400,
         )
+    target_category = update_data.get("category", model.category)
+    target_provider_id = update_data.get("provider_id", model.provider_id)
+    target_provider = await require_entity(
+        db,
+        Provider,
+        target_provider_id,
+        detail=entity_not_found("Provider"),
+        status_code=400,
+    )
+    _ensure_provider_supports_category(provider=target_provider, category=target_category)
     if update_data.get("is_default") is True:
-        target_category = update_data.get("category", model.category)
         await db.execute(update(Model).where(Model.category == target_category).values(is_default=False))
         await db.flush()
     patch_model(model, update_data)
@@ -279,3 +300,18 @@ def list_supported_providers(*, category: ModelCategoryKey | None) -> list[Provi
         )
         for spec in specs
     ]
+
+
+def _ensure_provider_supports_category(*, provider: Provider, category: ModelCategoryKey | str) -> None:
+    bootstrap_all_registries()
+    normalized_category = (
+        category
+        if isinstance(category, ModelCategoryKey)
+        else ModelCategoryKey((str(category or "")).strip().lower())
+    )
+    provider_key = resolve_provider_key_from_name(provider.name)
+    if not is_provider_category_supported(provider_key, normalized_category):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Provider {provider.name!r} does not support category={normalized_category.value}",
+        )
