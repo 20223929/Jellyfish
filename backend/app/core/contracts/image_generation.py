@@ -57,6 +57,10 @@ class ImageGenerationInput(BaseModel):
         None,
         description="随机种子；火山 ImageGenerations 支持该参数，OpenAI 目前忽略",
     )
+    watermark: Optional[bool] = Field(
+        None,
+        description="是否包含水印，供应商/模型可能有差异",
+    )
     response_format: ResponseFormat = Field(
         "url",
         description="返回格式：url 或 b64_json（OpenAI 语义）；火山引擎可忽略或仅支持 url",

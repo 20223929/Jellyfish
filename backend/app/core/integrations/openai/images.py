@@ -17,6 +17,7 @@ from app.core.contracts.image_generation import (
     ImageItem,
 )
 from app.core.contracts.provider import ProviderConfig
+from app.core.integrations.openai.image_capabilities import validate_openai_image_options
 
 
 class OpenAIImageApiAdapter:
@@ -35,6 +36,7 @@ class OpenAIImageApiAdapter:
             raise RuntimeError("httpx is required for image generation tasks") from e
 
         base_url = (cfg.base_url or "https://api.openai.com/v1").rstrip("/")
+        validate_openai_image_options(inp)
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
             "Content-Type": "application/json",
@@ -50,6 +52,8 @@ class OpenAIImageApiAdapter:
                     body["model"] = inp.model
                 if inp.size:
                     body["size"] = inp.size
+                if inp.watermark is not None:
+                    body["watermark"] = bool(inp.watermark)
 
                 body["images"] = [
                     {
@@ -79,6 +83,8 @@ class OpenAIImageApiAdapter:
                     body["model"] = inp.model
                 if inp.size:
                     body["size"] = inp.size
+                if inp.watermark is not None:
+                    body["watermark"] = bool(inp.watermark)
 
                 url = f"{base_url}/images/generations"
                 t0 = time.perf_counter()
