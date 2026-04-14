@@ -7,10 +7,16 @@ from app.core.tasks.registry import register_task_adapter
 from app.core.tasks.video_generation_tasks import VideoGenerationTask
 
 
+TASK_ADAPTER_SPECS = (
+    ("image_generation", "openai", ImageGenerationTask._build_openai_impl),
+    ("image_generation", "volcengine", ImageGenerationTask._build_volcengine_impl),
+    ("video_generation", "openai", VideoGenerationTask._build_openai_impl),
+    ("video_generation", "volcengine", VideoGenerationTask._build_volcengine_impl),
+)
+
+
 def bootstrap_task_adapters() -> None:
     """注册内置任务执行器（幂等）。"""
 
-    register_task_adapter("image_generation", "openai", ImageGenerationTask._build_openai_impl)
-    register_task_adapter("image_generation", "volcengine", ImageGenerationTask._build_volcengine_impl)
-    register_task_adapter("video_generation", "openai", VideoGenerationTask._build_openai_impl)
-    register_task_adapter("video_generation", "volcengine", VideoGenerationTask._build_volcengine_impl)
+    for task_kind, provider, factory in TASK_ADAPTER_SPECS:
+        register_task_adapter(task_kind, provider, factory)

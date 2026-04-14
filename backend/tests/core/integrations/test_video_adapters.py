@@ -6,6 +6,7 @@ import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.core.integrations.openai.video import OpenAIVideoApiAdapter
 from app.core.integrations.volcengine.video import VolcengineVideoApiAdapter
@@ -28,11 +29,16 @@ async def test_openai_video_create_returns_id(monkeypatch: pytest.MonkeyPatch) -
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert str(request.url).rstrip("/").endswith("/videos")
+        payload = json.loads(request.content.decode())
+        assert payload["ratio"] == "16:9"
+        assert payload["seed"] == 42
+        assert payload["watermark"] is False
+        assert payload["seconds"] == "6"
         return httpx.Response(200, json={"id": "video-1"})
 
     _patch_httpx_client(monkeypatch, httpx.MockTransport(handler))
     cfg = ProviderConfig(provider="openai", api_key="sk-test")
-    inp = VideoGenerationInput(prompt="a cat")
+    inp = VideoGenerationInput(prompt="a cat", ratio="16:9", seed=42, watermark=False, seconds=6)
     vid = await OpenAIVideoApiAdapter().create_video(cfg=cfg, input_=inp, timeout_s=30.0)
     assert vid == "video-1"
 
@@ -56,6 +62,10 @@ async def test_volcengine_video_create_and_get(monkeypatch: pytest.MonkeyPatch) 
         if request.method == "POST":
             body = json.loads(request.content.decode())
             assert "content" in body
+            assert body["ratio"] == "9:16"
+            assert body["duration"] == 8
+            assert body["seed"] == 7
+            assert body["watermark"] is True
             return httpx.Response(200, json={"id": "t-1"})
         if request.method == "GET":
             assert "/contents/generations/tasks/t-1" in str(request.url)
@@ -67,9 +77,29 @@ async def test_volcengine_video_create_and_get(monkeypatch: pytest.MonkeyPatch) 
 
     _patch_httpx_client(monkeypatch, httpx.MockTransport(handler))
     cfg = ProviderConfig(provider="volcengine", api_key="ak-test")
-    inp = VideoGenerationInput(prompt="舞")
+    inp = VideoGenerationInput(prompt="舞", size="720x1280", seconds=8, seed=7, watermark=True)
     tid = await VolcengineVideoApiAdapter().create_contents_task(cfg=cfg, input_=inp, timeout_s=30.0)
     assert tid == "t-1"
     meta = await VolcengineVideoApiAdapter().get_contents_task(cfg=cfg, task_id=tid, timeout_s=30.0)
     assert meta["status"] == "succeeded"
     assert meta["content"]["video_url"] == "https://v.example/out.mp4"
+
+
+def test_video_input_seed_bounds_validation() -> None:
+    VideoGenerationInput(prompt="ok", seed=-1)
+    VideoGenerationInput(prompt="ok", seed=4294967295)
+    with pytest.raises(ValidationError):
+        VideoGenerationInput(prompt="bad", seed=4294967296)
+
+
+@pytest.mark.asyncio
+async def test_openai_video_create_rejects_ratio_size_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    _patch_httpx_client(monkeypatch, httpx.MockTransport(handler))
+    cfg = ProviderConfig(provider="openai", api_key="sk-test")
+    inp = VideoGenerationInput(prompt="a cat", ratio="16:9", size="720x1280")
+    with pytest.raises(ValueError) as exc_info:
+        await OpenAIVideoApiAdapter().create_video(cfg=cfg, input_=inp, timeout_s=30.0)
+    assert "ratio conflicts with size" in str(exc_info.value)

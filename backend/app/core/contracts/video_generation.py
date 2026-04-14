@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,6 +30,17 @@ class VideoGenerationInput(BaseModel):
     model: Optional[str] = Field(None, description="视频模型名称（可选，供应商透传）")
     size: Optional[str] = Field(None, description="分辨率，如 720x1280（可选，供应商透传）")
     seconds: Optional[int] = Field(None, description="时长（秒）（可选，供应商透传）")
+    seed: Optional[int] = Field(
+        None,
+        ge=-1,
+        le=4294967295,
+        description="随机种子，-1 或 [0, 2^32-1]，供应商/模型可能有差异",
+    )
+    watermark: Optional[bool] = Field(None, description="是否包含水印，供应商/模型可能有差异")
+    ratio: Optional[Literal["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]] = Field(
+        None,
+        description="视频宽高比，供应商/模型可能有差异",
+    )
 
     @model_validator(mode="after")
     def require_prompt_or_any_reference(self) -> "VideoGenerationInput":
