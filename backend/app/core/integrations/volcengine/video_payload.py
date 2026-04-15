@@ -10,15 +10,6 @@ from app.core.integrations.volcengine.video_capabilities import validate_volceng
 from app.core.contracts.video_generation import VideoGenerationInput, _strip_optional_b64
 
 
-def volcengine_ratio(size: str | None) -> str:
-    if not size or not str(size).strip():
-        return "adaptive"
-    s = str(size).strip()
-    if s.lower() == "adaptive" or ":" in s:
-        return s
-    return "adaptive"
-
-
 def build_content(input_: VideoGenerationInput) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     prompt = (input_.prompt or "").strip()
@@ -61,7 +52,7 @@ def build_create_task_body(input_: VideoGenerationInput) -> dict[str, Any]:
     if not content:
         raise RuntimeError("Volcengine video requires non-empty content (prompt and/or reference frames)")
 
-    effective_ratio = resolve_effective_ratio(input_) or volcengine_ratio(input_.size)
+    effective_ratio = resolve_effective_ratio(input_)
     body: dict[str, Any] = {
         "content": content,
         "ratio": effective_ratio,

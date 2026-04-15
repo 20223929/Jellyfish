@@ -65,7 +65,7 @@ def test_preview_video_generation_prompt_returns_success_envelope(client: TestCl
                 "reference_mode": "first_last",
                 "prompt": "生成一个压迫感强的镜头",
                 "images": [],
-                "size": "720x1280",
+                "ratio": "9:16",
             },
         )
     finally:
@@ -97,6 +97,7 @@ def test_preview_video_generation_prompt_not_found_returns_api_response(
                 "reference_mode": "text_only",
                 "prompt": "仅文本生成",
                 "images": [],
+                "ratio": "16:9",
             },
         )
     finally:
@@ -125,7 +126,7 @@ def test_create_video_generation_task_returns_created_envelope(client: TestClien
                 "reference_mode": "first",
                 "prompt": "生成一个节奏紧张的视频片段",
                 "images": [],
-                "size": "720x1280",
+                "ratio": "9:16",
             },
         )
     finally:
@@ -152,6 +153,7 @@ def test_create_video_generation_task_validation_error_returns_api_response(clie
                 "reference_mode": "invalid-mode",
                 "prompt": "bad",
                 "images": [],
+                "ratio": "16:9",
             },
         )
     finally:

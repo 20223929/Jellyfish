@@ -12,7 +12,6 @@ export type ShotDetailUpdate = {
     movement?: (CameraMovement | null);
     scene_id?: (string | null);
     duration?: (number | null);
-    override_video_size?: (string | null);
     override_video_ratio?: (string | null);
     mood_tags?: (Array<string> | null);
     atmosphere?: (string | null);

@@ -56,7 +56,6 @@ type ProjectStageSummary = {
 type ProjectFlowStatsMap = Record<string, ProjectFlowStats>
 type ProjectView = Project & {
   visualStyle?: ProjectVisualStyleChoice
-  defaultVideoSize?: string | null
   defaultVideoRatio?: string | null
 }
 
@@ -79,9 +78,7 @@ const ProjectLobby: React.FC = () => {
   const [projectFlowStatsMap, setProjectFlowStatsMap] = useState<ProjectFlowStatsMap>({})
   const {
     options: projectStyleOptions,
-    videoSizeOptions,
     videoRatioOptions,
-    defaultVideoSize,
     defaultVideoRatio,
   } = useProjectStyleOptions()
   const [form] = Form.useForm()
@@ -117,7 +114,6 @@ const ProjectLobby: React.FC = () => {
       },
       updatedAt,
       visualStyle: (p.visual_style as ProjectVisualStyleChoice | undefined) ?? '现实',
-      defaultVideoSize: p.default_video_size ?? null,
       defaultVideoRatio: p.default_video_ratio ?? null,
     }
   }
@@ -382,7 +378,6 @@ const ProjectLobby: React.FC = () => {
       style: defaultStyle,
       seed: Math.floor(Math.random() * 99999),
       unifyStyle: true,
-      default_video_size: defaultVideoSize,
       default_video_ratio: defaultVideoRatio,
     })
     setCreateModalOpen(true)
@@ -395,7 +390,6 @@ const ProjectLobby: React.FC = () => {
     visual_style: ProjectVisualStyleChoice
     seed: number
     unifyStyle: boolean
-    default_video_size?: string
     default_video_ratio?: string
   }) => {
     try {
@@ -409,7 +403,6 @@ const ProjectLobby: React.FC = () => {
           visual_style: values.visual_style as any,
           seed: values.seed,
           unify_style: values.unifyStyle,
-          default_video_size: values.default_video_size || null,
           default_video_ratio: values.default_video_ratio || null,
           progress: 0,
         },
@@ -436,7 +429,6 @@ const ProjectLobby: React.FC = () => {
       visual_style: p.visualStyle ?? '现实',
       seed: p.seed,
       unifyStyle: p.unifyStyle,
-      default_video_size: p.defaultVideoSize ?? undefined,
       default_video_ratio: p.defaultVideoRatio ?? undefined,
     })
     setEditModalOpen(true)
@@ -449,7 +441,6 @@ const ProjectLobby: React.FC = () => {
     visual_style: ProjectVisualStyleChoice
     seed: number
     unifyStyle: boolean
-    default_video_size?: string
     default_video_ratio?: string
   }) => {
     if (!editingProject) return
@@ -463,7 +454,6 @@ const ProjectLobby: React.FC = () => {
           visual_style: values.visual_style as any,
           seed: values.seed,
           unify_style: values.unifyStyle,
-          default_video_size: values.default_video_size || null,
           default_video_ratio: values.default_video_ratio || null,
         },
       })
@@ -982,7 +972,6 @@ const ProjectLobby: React.FC = () => {
               '真人都市',
             seed: Math.floor(Math.random() * 99999),
             unifyStyle: true,
-            default_video_size: defaultVideoSize,
             default_video_ratio: defaultVideoRatio,
           }}
         >
@@ -1003,9 +992,6 @@ const ProjectLobby: React.FC = () => {
             tooltip="固定种子可确保整部短剧视觉调性一致"
           >
             <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="default_video_size" label="默认视频尺寸">
-            <Select allowClear placeholder="未设置时由模型/供应商决定" options={videoSizeOptions} />
           </Form.Item>
           <Form.Item name="default_video_ratio" label="默认视频比例">
             <Select allowClear placeholder="未设置时由模型/供应商决定" options={videoRatioOptions} />
@@ -1051,9 +1037,6 @@ const ProjectLobby: React.FC = () => {
           <ProjectVisualStyleAndStyleFields form={editForm} options={projectStyleOptions} />
           <Form.Item name="seed" label="全局种子值" tooltip="固定种子可确保整部短剧视觉调性一致">
             <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="default_video_size" label="默认视频尺寸">
-            <Select allowClear placeholder="未设置时由模型/供应商决定" options={videoSizeOptions} />
           </Form.Item>
           <Form.Item name="default_video_ratio" label="默认视频比例">
             <Select allowClear placeholder="未设置时由模型/供应商决定" options={videoRatioOptions} />

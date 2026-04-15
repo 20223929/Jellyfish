@@ -16,6 +16,9 @@ def _strip_optional_b64(value: str | None) -> str | None:
     return s if s else None
 
 
+VideoRatio = Literal["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]
+
+
 class VideoGenerationInput(BaseModel):
     """视频生成输入：支持文本提示词 + 可选的三种帧参考图（纯 base64 或 data URL）。"""
 
@@ -28,7 +31,7 @@ class VideoGenerationInput(BaseModel):
     key_frame_base64: Optional[str] = Field(None, description="关键帧图：纯 base64 或 data URL")
 
     model: Optional[str] = Field(None, description="视频模型名称（可选，供应商透传）")
-    size: Optional[str] = Field(None, description="分辨率，如 720x1280（可选，供应商透传）")
+    ratio: VideoRatio = Field(..., description="视频宽高比，业务层唯一主参数")
     seconds: Optional[int] = Field(None, description="时长（秒）（可选，供应商透传）")
     seed: Optional[int] = Field(
         None,
@@ -37,10 +40,6 @@ class VideoGenerationInput(BaseModel):
         description="随机种子，-1 或 [0, 2^32-1]，供应商/模型可能有差异",
     )
     watermark: Optional[bool] = Field(None, description="是否包含水印，供应商/模型可能有差异")
-    ratio: Optional[Literal["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]] = Field(
-        None,
-        description="视频宽高比，供应商/模型可能有差异",
-    )
 
     @model_validator(mode="after")
     def require_prompt_or_any_reference(self) -> "VideoGenerationInput":

@@ -4,7 +4,7 @@
 /* eslint-disable */
 import type { StyleOption } from './StyleOption';
 /**
- * 项目风格与视频参数候选项。
+ * 项目风格候选项。
  */
 export type ProjectStyleOptionsRead = {
     /**
@@ -19,21 +19,5 @@ export type ProjectStyleOptionsRead = {
      * 各视觉风格默认视频风格
      */
     default_style_by_visual_style?: Record<string, string>;
-    /**
-     * 默认视频比例（用于创建项目时的初始值）
-     */
-    default_video_ratio?: (string | null);
-    /**
-     * 默认视频尺寸（用于创建项目时的初始值）
-     */
-    default_video_size?: (string | null);
-    /**
-     * 视频比例候选项
-     */
-    video_ratios?: Array<StyleOption>;
-    /**
-     * 视频尺寸候选项
-     */
-    video_sizes?: Array<StyleOption>;
 };
 

@@ -70,12 +70,17 @@ backend/app/services/studio/generation/
 
 当前 `preview-prompt` 与 `create video task` 已共享同一份 `reference_mode + images` 上下文。
 
-当前视频参数（`size` / `ratio`）采用“项目默认 + 分镜覆盖 + 请求显式参数”解析：
+当前视频参数已收口为以 `ratio` 为唯一业务主参数：
 
-- 项目级默认：`Project.default_video_size` / `Project.default_video_ratio`
-- 分镜级覆盖：`ShotDetail.override_video_size` / `ShotDetail.override_video_ratio`
-- 执行优先级：请求参数 > 分镜覆盖 > 项目默认 > 供应商默认
-- 冲突规则：若 `size` 推导比例与 `ratio` 冲突，任务创建阶段直接报错
+- 项目级默认：`Project.default_video_ratio`
+- 分镜级覆盖：`ShotDetail.override_video_ratio`
+- 前端在提交视频任务时显式传入本次生效的 `ratio`
+- 后端直接使用请求中的 `ratio` 创建任务
+- 若某个供应商不直接支持 `ratio`，由 provider adapter 在执行层内部派生辅助 `size`
+- 前端比例枚举来自当前默认视频模型 capability 动态返回，不再使用静态常量
+- 关键帧图片若用于视频参考，提交时会显式携带 `target_ratio + resolution_profile`
+- 后端根据当前默认图片模型 capability 解析对应 `size`，保证关键帧画幅与目标视频保持一致
+- 工作室会展示当前关键帧规格预览：`ratio + resolution_profile -> size`
 
 ### `asset_image`
 

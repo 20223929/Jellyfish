@@ -16,9 +16,8 @@ from app.core.contracts.video_generation import VideoGenerationInput, VideoGener
 from app.core.tasks import VideoGenerationTask
 from app.models.llm import Model, ModelCategoryKey, ModelSettings
 from app.models.task_links import GenerationTaskLink
-from app.models.studio import Chapter, FileItem, Project, Shot, ShotDetail, ShotFrameType
+from app.models.studio import FileItem, Shot, ShotDetail, ShotFrameType
 from app.models.types import FileUsageKind
-from app.core.integrations.video_capabilities import infer_ratio_from_size
 from app.services.common import entity_not_found
 from app.services.llm.provider_resolver import resolve_provider_config_by_model
 from app.services.studio.file_usages import sync_usage_from_shot_context
@@ -131,48 +130,13 @@ def _normalize_optional_text(value: str | None) -> str | None:
 
 
 async def resolve_effective_video_options(
-    db: AsyncSession,
-    *,
-    shot_id: str,
-    shot_detail: ShotDetail,
-    requested_size: str | None,
     requested_ratio: str | None,
-) -> tuple[str | None, str | None]:
-    """解析视频参数优先级：请求参数 > 分镜覆盖 > 项目默认。"""
-    req_size = _normalize_optional_text(requested_size)
+) -> str:
+    """解析视频比例：请求参数为唯一主参数。"""
     req_ratio = _normalize_optional_text(requested_ratio)
-    shot_size = _normalize_optional_text(getattr(shot_detail, "override_video_size", None))
-    shot_ratio = _normalize_optional_text(getattr(shot_detail, "override_video_ratio", None))
-
-    project_size: str | None = None
-    project_ratio: str | None = None
-    if req_size is None or req_ratio is None:
-        stmt = (
-            select(Project.default_video_size, Project.default_video_ratio)
-            .select_from(Shot)
-            .join(Chapter, Chapter.id == Shot.chapter_id)
-            .join(Project, Project.id == Chapter.project_id)
-            .where(Shot.id == shot_id)
-            .limit(1)
-        )
-        row = (await db.execute(stmt)).first()
-        if row is not None:
-            project_size = _normalize_optional_text(row[0])
-            project_ratio = _normalize_optional_text(row[1])
-
-    resolved_size = req_size or shot_size or project_size
-    resolved_ratio = req_ratio or shot_ratio or project_ratio
-
-    implied_ratio = infer_ratio_from_size(resolved_size)
-    if resolved_ratio and implied_ratio and implied_ratio != resolved_ratio:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"ratio conflicts with size: ratio={resolved_ratio}, "
-                f"size={resolved_size} (implies {implied_ratio})"
-            ),
-        )
-    return resolved_size, resolved_ratio
+    if not req_ratio:
+        raise HTTPException(status_code=400, detail="ratio is required")
+    return req_ratio
 
 
 async def build_run_args(
@@ -182,20 +146,13 @@ async def build_run_args(
     reference_mode: str,
     prompt: str | None,
     images: list[str],
-    size: str | None,
     ratio: str | None,
 ) -> dict:
     model = await resolve_default_video_model(db)
     provider_cfg = await load_provider_config_by_model(db, model)
     shot_detail = await validate_shot_and_duration(db, shot_id)
-    resolved_size, resolved_ratio = await resolve_effective_video_options(
-        db,
-        shot_id=shot_id,
-        shot_detail=shot_detail,
-        requested_size=size,
-        requested_ratio=ratio,
-    )
-    base = build_video_base_draft(shot_id=shot_id, prompt=prompt, size=resolved_size)
+    resolved_ratio = await resolve_effective_video_options(requested_ratio=ratio)
+    base = build_video_base_draft(shot_id=shot_id, prompt=prompt)
     context = await build_video_context(
         db,
         shot_id=shot_id,
@@ -224,7 +181,6 @@ async def build_run_args(
             "last_frame_base64": frame_map.get(ShotFrameType.last),
             "key_frame_base64": frame_map.get(ShotFrameType.key),
             "model": model.name,
-            "size": resolved_size,
             "ratio": resolved_ratio,
             "seconds": shot_detail.duration,
         },

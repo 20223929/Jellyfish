@@ -72,6 +72,30 @@ class ProviderSupportedRead(BaseModel):
     is_experimental: bool = Field(False, description="是否实验性供应商")
 
 
+class VideoGenerationOptionsRead(BaseModel):
+    """当前默认视频模型对应的生成参数选项。"""
+
+    provider: str = Field(..., description="供应商稳定键")
+    model_id: str = Field(..., description="默认视频模型 ID")
+    model_name: str = Field(..., description="默认视频模型名称")
+    allowed_ratios: list[str] = Field(default_factory=list, description="当前模型允许的比例选项")
+    default_ratio: str = Field(..., description="当前模型默认比例")
+
+
+class ImageGenerationOptionsRead(BaseModel):
+    """当前默认图片模型对应的关键帧规格选项。"""
+
+    provider: str = Field(..., description="供应商稳定键")
+    model_id: str = Field(..., description="默认图片模型 ID")
+    model_name: str = Field(..., description="默认图片模型名称")
+    supported_ratios: list[str] = Field(default_factory=list, description="当前模型支持的目标比例")
+    default_resolution_profile: str = Field(..., description="当前模型默认分辨率档位")
+    ratio_size_profiles: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description="按比例和分辨率档位映射得到的像素尺寸",
+    )
+
+
 class ModelBase(BaseModel):
     """模型通用字段。"""
 

@@ -132,7 +132,6 @@ class ShotDetailBase(BaseModel):
     movement: CameraMovement = Field(..., description="运镜方式")
     scene_id: str | None = Field(None, description="关联场景 ID（可空）")
     duration: int = Field(0, description="时长（秒）")
-    override_video_size: str | None = Field(None, description="分镜级视频尺寸覆盖；为空表示继承项目默认")
     override_video_ratio: str | None = Field(None, description="分镜级视频比例覆盖；为空表示继承项目默认")
     mood_tags: list[str] = Field(default_factory=list, description="情绪标签")
     atmosphere: str = Field("", description="氛围描述")
@@ -164,7 +163,6 @@ class ShotDetailUpdate(BaseModel):
     movement: CameraMovement | None = None
     scene_id: str | None = None
     duration: int | None = None
-    override_video_size: str | None = None
     override_video_ratio: str | None = None
     mood_tags: list[str] | None = None
     atmosphere: str | None = None

@@ -9,6 +9,7 @@ from app.dependencies import get_db
 from app.models.llm import ModelCategoryKey
 from app.schemas.common import ApiResponse, PaginatedData, created_response, empty_response, success_response
 from app.schemas.llm import (
+    ImageGenerationOptionsRead,
     ModelCreate,
     ModelRead,
     ModelSettingsRead,
@@ -17,6 +18,7 @@ from app.schemas.llm import (
     ProviderCreate,
     ProviderRead,
     ProviderSupportedRead,
+    VideoGenerationOptionsRead,
     ProviderUpdate,
 )
 from app.services.llm.manage import (
@@ -27,6 +29,8 @@ from app.services.llm.manage import (
     get_model as get_model_service,
     get_model_settings as get_model_settings_service,
     get_provider as get_provider_service,
+    get_image_generation_options as get_image_generation_options_service,
+    get_video_generation_options as get_video_generation_options_service,
     list_supported_providers as list_supported_providers_service,
     list_models_paginated,
     list_providers_paginated,
@@ -81,6 +85,30 @@ async def list_supported_providers(
 ) -> ApiResponse[list[ProviderSupportedRead]]:
     items = list_supported_providers_service(category=category)
     return success_response(items)
+
+
+@router.get(
+    "/image-generation-options",
+    response_model=ApiResponse[ImageGenerationOptionsRead],
+    summary="获取当前默认图片模型的关键帧规格选项",
+)
+async def get_image_generation_options(
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[ImageGenerationOptionsRead]:
+    data = await get_image_generation_options_service(db)
+    return success_response(data)
+
+
+@router.get(
+    "/video-generation-options",
+    response_model=ApiResponse[VideoGenerationOptionsRead],
+    summary="获取当前默认视频模型的动态比例选项",
+)
+async def get_video_generation_options(
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[VideoGenerationOptionsRead]:
+    data = await get_video_generation_options_service(db)
+    return success_response(data)
 
 
 @router.post(

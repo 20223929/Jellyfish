@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { StudioProjectsService } from '../../../services/generated'
+import { LlmService, StudioProjectsService } from '../../../services/generated'
 import type { ProjectStyleOptionsRead } from '../../../services/generated'
 import type { ProjectStyleFieldOptions } from './ProjectVisualStyleAndStyleFields'
 
@@ -30,15 +30,12 @@ const FALLBACK_OPTIONS: ProjectStyleFieldOptions = {
 type OptionItem = { value: string; label: string }
 type ProjectStyleOptionsSnapshot = {
   options: ProjectStyleFieldOptions
-  videoSizeOptions: OptionItem[]
   videoRatioOptions: OptionItem[]
-  defaultVideoSize: string
   defaultVideoRatio: string
 }
 
 let cachedSnapshot: ProjectStyleOptionsSnapshot | null = null
 let loadingSnapshotPromise: Promise<ProjectStyleOptionsSnapshot> | null = null
-const FALLBACK_DEFAULT_VIDEO_SIZE = '1920x1080'
 const FALLBACK_DEFAULT_VIDEO_RATIO = '16:9'
 
 function normalizeOptionItems(items: OptionItem[] | null | undefined): OptionItem[] {
@@ -79,23 +76,25 @@ async function loadProjectStyleOptionsSnapshot(): Promise<ProjectStyleOptionsSna
   if (loadingSnapshotPromise) return loadingSnapshotPromise
   loadingSnapshotPromise = (async () => {
     try {
-      const res = await StudioProjectsService.getProjectStyleOptionsApiV1StudioProjectsStyleOptionsGet()
-      const data = res.data
+      const [styleRes, videoRes] = await Promise.all([
+        StudioProjectsService.getProjectStyleOptionsApiV1StudioProjectsStyleOptionsGet(),
+        LlmService.getVideoGenerationOptionsApiV1LlmVideoGenerationOptionsGet(),
+      ])
+      const styleData = styleRes.data
+      const videoData = videoRes.data
       const snapshot: ProjectStyleOptionsSnapshot = {
-        options: normalizeStyleOptions(data ?? undefined),
-        videoSizeOptions: normalizeOptionItems((data?.video_sizes ?? []) as OptionItem[]),
-        videoRatioOptions: normalizeOptionItems((data?.video_ratios ?? []) as OptionItem[]),
-        defaultVideoSize: data?.default_video_size ?? FALLBACK_DEFAULT_VIDEO_SIZE,
-        defaultVideoRatio: data?.default_video_ratio ?? FALLBACK_DEFAULT_VIDEO_RATIO,
+        options: normalizeStyleOptions(styleData ?? undefined),
+        videoRatioOptions: normalizeOptionItems(
+          (videoData?.allowed_ratios ?? []).map((value) => ({ value, label: value })),
+        ),
+        defaultVideoRatio: videoData?.default_ratio ?? FALLBACK_DEFAULT_VIDEO_RATIO,
       }
       cachedSnapshot = snapshot
       return snapshot
     } catch {
       const snapshot: ProjectStyleOptionsSnapshot = {
         options: FALLBACK_OPTIONS,
-        videoSizeOptions: [],
         videoRatioOptions: [],
-        defaultVideoSize: FALLBACK_DEFAULT_VIDEO_SIZE,
         defaultVideoRatio: FALLBACK_DEFAULT_VIDEO_RATIO,
       }
       cachedSnapshot = snapshot
@@ -109,9 +108,7 @@ async function loadProjectStyleOptionsSnapshot(): Promise<ProjectStyleOptionsSna
 
 export function useProjectStyleOptions() {
   const [options, setOptions] = useState<ProjectStyleFieldOptions>(cachedSnapshot?.options ?? FALLBACK_OPTIONS)
-  const [videoSizeOptions, setVideoSizeOptions] = useState<OptionItem[]>(cachedSnapshot?.videoSizeOptions ?? [])
   const [videoRatioOptions, setVideoRatioOptions] = useState<OptionItem[]>(cachedSnapshot?.videoRatioOptions ?? [])
-  const [defaultVideoSize, setDefaultVideoSize] = useState<string>(cachedSnapshot?.defaultVideoSize ?? FALLBACK_DEFAULT_VIDEO_SIZE)
   const [defaultVideoRatio, setDefaultVideoRatio] = useState<string>(cachedSnapshot?.defaultVideoRatio ?? FALLBACK_DEFAULT_VIDEO_RATIO)
 
   useEffect(() => {
@@ -120,9 +117,7 @@ export function useProjectStyleOptions() {
       const snapshot = await loadProjectStyleOptionsSnapshot()
       if (!active) return
       setOptions(snapshot.options)
-      setVideoSizeOptions(snapshot.videoSizeOptions)
       setVideoRatioOptions(snapshot.videoRatioOptions)
-      setDefaultVideoSize(snapshot.defaultVideoSize)
       setDefaultVideoRatio(snapshot.defaultVideoRatio)
     })()
     return () => {
@@ -138,9 +133,7 @@ export function useProjectStyleOptions() {
 
   return {
     options,
-    videoSizeOptions,
     videoRatioOptions,
-    defaultVideoSize,
     defaultVideoRatio,
     defaultVisualStyle,
     getDefaultStyle,

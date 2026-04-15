@@ -79,6 +79,40 @@ async def test_openai_image_adapter_edits_when_references(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_openai_image_adapter_resolves_video_reference_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode()
+        return httpx.Response(200, json={"data": [{"url": "https://cdn.example.com/ref.png"}]})
+
+    _patch_httpx_client(monkeypatch, httpx.MockTransport(handler))
+    clear_image_model_capability_overrides(provider="openai")
+    register_image_model_capability(
+        provider="openai",
+        model_prefix="gpt-image-video-ref",
+        capability=ImageModelCapability(
+            supported_ratios={"16:9"},
+            ratio_size_profiles={"16:9": {"standard": "1792x1024"}},
+        ),
+    )
+    cfg = ProviderConfig(provider="openai", api_key="sk-test", base_url="https://api.openai.com/v1")
+    inp = ImageGenerationInput(
+        prompt="video ref",
+        model="gpt-image-video-ref-1",
+        target_ratio="16:9",
+        resolution_profile="standard",
+        purpose="video_reference",
+    )
+    try:
+        await OpenAIImageApiAdapter().generate(cfg=cfg, inp=inp, timeout_s=30.0)
+        body = json.loads(captured["body"])
+        assert body["size"] == "1792x1024"
+    finally:
+        clear_image_model_capability_overrides(provider="openai")
+
+
+@pytest.mark.asyncio
 async def test_volcengine_image_adapter_generations(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/images/generations")
@@ -86,6 +120,7 @@ async def test_volcengine_image_adapter_generations(monkeypatch: pytest.MonkeyPa
         assert payload["prompt"] == "火山"
         assert payload["n"] == 1
         assert payload["watermark"] is True
+        assert payload["size"] == "1600x2848"
         return httpx.Response(
             200,
             json={
@@ -97,7 +132,15 @@ async def test_volcengine_image_adapter_generations(monkeypatch: pytest.MonkeyPa
 
     _patch_httpx_client(monkeypatch, httpx.MockTransport(handler))
     cfg = ProviderConfig(provider="volcengine", api_key="ak-test")
-    inp = ImageGenerationInput(prompt="火山", n=1, seed=42, watermark=True)
+    inp = ImageGenerationInput(
+        prompt="火山",
+        n=1,
+        seed=42,
+        watermark=True,
+        target_ratio="9:16",
+        resolution_profile="standard",
+        purpose="video_reference",
+    )
     result = await VolcengineImageApiAdapter().generate(cfg=cfg, inp=inp, timeout_s=30.0)
     assert result.provider == "volcengine"
     assert result.provider_task_id == "task-xyz"

@@ -17,6 +17,7 @@ from app.core.contracts.image_generation import (
     ImageItem,
 )
 from app.core.contracts.provider import ProviderConfig
+from app.core.integrations.image_capabilities import resolve_image_size
 from app.core.integrations.volcengine.image_capabilities import validate_volcengine_image_options
 
 
@@ -36,13 +37,22 @@ class VolcengineImageApiAdapter:
             raise RuntimeError("httpx is required for image generation tasks") from e
 
         base_url = (cfg.base_url or "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
-        validate_volcengine_image_options(inp)
+        resolved_size = resolve_image_size(
+            provider="volcengine",
+            model=inp.model,
+            purpose=inp.purpose,
+            target_ratio=inp.target_ratio,
+            resolution_profile=inp.resolution_profile,
+            requested_size=inp.size,
+        )
+        resolved_input = inp.model_copy(update={"size": resolved_size})
+        validate_volcengine_image_options(resolved_input)
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
             "Content-Type": "application/json",
         }
 
-        body = _build_image_body(inp)
+        body = _build_image_body(resolved_input)
 
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             url = f"{base_url}/images/generations"

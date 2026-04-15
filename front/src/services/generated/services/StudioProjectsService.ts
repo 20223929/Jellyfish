@@ -13,7 +13,7 @@ import { OpenAPI } from '../core/OpenAPI';
 import { request as __request } from '../core/request';
 export class StudioProjectsService {
     /**
-     * 获取项目风格与视频参数候选项
+     * 获取项目风格候选项
      * @returns ApiResponse_ProjectStyleOptionsRead_ Successful Response
      * @throws ApiError
      */

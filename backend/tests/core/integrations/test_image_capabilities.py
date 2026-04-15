@@ -10,6 +10,7 @@ from app.core.integrations.image_capabilities import (
     clear_image_model_capability_overrides,
     register_image_model_capability,
     resolve_image_capability,
+    resolve_image_size,
     validate_image_options,
 )
 
@@ -48,3 +49,48 @@ def test_validate_image_options_rejects_capability_mismatch() -> None:
         assert "watermark is not supported" in str(exc_info.value)
     finally:
         clear_image_model_capability_overrides(provider="volcengine")
+
+
+def test_resolve_image_size_uses_video_reference_ratio_profile() -> None:
+    clear_image_model_capability_overrides(provider="openai")
+    register_image_model_capability(
+        provider="openai",
+        model_prefix="gpt-image-video-ref",
+        capability=ImageModelCapability(
+            supported_ratios={"16:9"},
+            ratio_size_profiles={"16:9": {"standard": "1792x1024"}},
+        ),
+    )
+    try:
+        size = resolve_image_size(
+            provider="openai",
+            model="gpt-image-video-ref-1",
+            purpose="video_reference",
+            target_ratio="16:9",
+            resolution_profile="standard",
+            requested_size=None,
+        )
+        assert size == "1792x1024"
+    finally:
+        clear_image_model_capability_overrides(provider="openai")
+
+
+def test_resolve_image_size_uses_volcengine_builtin_2k_3k_profiles() -> None:
+    size_2k = resolve_image_size(
+        provider="volcengine",
+        model="seedream-v3",
+        purpose="video_reference",
+        target_ratio="9:16",
+        resolution_profile="standard",
+        requested_size=None,
+    )
+    size_3k = resolve_image_size(
+        provider="volcengine",
+        model="seedream-v3",
+        purpose="video_reference",
+        target_ratio="21:9",
+        resolution_profile="high",
+        requested_size=None,
+    )
+    assert size_2k == "1600x2848"
+    assert size_3k == "4704x2016"

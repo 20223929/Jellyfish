@@ -17,6 +17,7 @@ from app.core.contracts.image_generation import (
     ImageItem,
 )
 from app.core.contracts.provider import ProviderConfig
+from app.core.integrations.image_capabilities import resolve_image_size
 from app.core.integrations.openai.image_capabilities import validate_openai_image_options
 
 
@@ -36,31 +37,40 @@ class OpenAIImageApiAdapter:
             raise RuntimeError("httpx is required for image generation tasks") from e
 
         base_url = (cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        validate_openai_image_options(inp)
+        resolved_size = resolve_image_size(
+            provider="openai",
+            model=inp.model,
+            purpose=inp.purpose,
+            target_ratio=inp.target_ratio,
+            resolution_profile=inp.resolution_profile,
+            requested_size=inp.size,
+        )
+        resolved_input = inp.model_copy(update={"size": resolved_size})
+        validate_openai_image_options(resolved_input)
         headers = {
             "Authorization": f"Bearer {cfg.api_key}",
             "Content-Type": "application/json",
         }
 
         async with httpx.AsyncClient(timeout=timeout_s) as client:
-            if inp.images:
+            if resolved_input.images:
                 body: dict[str, Any] = {
-                    "prompt": inp.prompt,
-                    "n": inp.n,
+                    "prompt": resolved_input.prompt,
+                    "n": resolved_input.n,
                 }
-                if inp.model:
-                    body["model"] = inp.model
-                if inp.size:
-                    body["size"] = inp.size
-                if inp.watermark is not None:
-                    body["watermark"] = bool(inp.watermark)
+                if resolved_input.model:
+                    body["model"] = resolved_input.model
+                if resolved_input.size:
+                    body["size"] = resolved_input.size
+                if resolved_input.watermark is not None:
+                    body["watermark"] = bool(resolved_input.watermark)
 
                 body["images"] = [
                     {
                         **({"file_id": ref.file_id} if ref.file_id else {}),
                         **({"image_url": ref.image_url} if ref.image_url else {}),
                     }
-                    for ref in inp.images
+                    for ref in resolved_input.images
                 ]
 
                 url = f"{base_url}/images/edits"
@@ -75,16 +85,16 @@ class OpenAIImageApiAdapter:
                 r = await client.post(url, headers=headers, json=body)
             else:
                 body = {
-                    "prompt": inp.prompt,
-                    "n": inp.n,
-                    "response_format": inp.response_format,
+                    "prompt": resolved_input.prompt,
+                    "n": resolved_input.n,
+                    "response_format": resolved_input.response_format,
                 }
-                if inp.model:
-                    body["model"] = inp.model
-                if inp.size:
-                    body["size"] = inp.size
-                if inp.watermark is not None:
-                    body["watermark"] = bool(inp.watermark)
+                if resolved_input.model:
+                    body["model"] = resolved_input.model
+                if resolved_input.size:
+                    body["size"] = resolved_input.size
+                if resolved_input.watermark is not None:
+                    body["watermark"] = bool(resolved_input.watermark)
 
                 url = f"{base_url}/images/generations"
                 t0 = time.perf_counter()

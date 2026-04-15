@@ -109,7 +109,7 @@ def test_create_shot_frame_image_task_requires_prompt(client: TestClient) -> Non
     try:
         response = client.post(
             "/api/v1/studio/image-tasks/shot/shot-1/frame-image-tasks",
-            json={"frame_type": "first", "prompt": "   ", "images": []},
+            json={"frame_type": "first", "prompt": "   ", "target_ratio": "16:9", "images": []},
         )
     finally:
         app.dependency_overrides.clear()
@@ -190,6 +190,9 @@ def test_create_shot_frame_image_task_renders_prompt_before_submit(client: TestC
         assert kwargs["prompt"].startswith("## 图片内容说明")
         assert "图1: 陆远" in kwargs["prompt"]
         assert kwargs["images"] == [{"image_url": "data:image/png;base64,abc"}]
+        assert kwargs["target_ratio"] == "9:16"
+        assert kwargs["resolution_profile"] == "standard"
+        assert kwargs["purpose"] == "video_reference"
         assert kwargs["render_context"]["images"] == ["file-1"]
         assert kwargs["render_context"]["mappings"][0]["token"] == "图1"
         return "task-1"
@@ -203,6 +206,8 @@ def test_create_shot_frame_image_task_renders_prompt_before_submit(client: TestC
             json={
                 "frame_type": "first",
                 "prompt": "陆远站在温室里",
+                "target_ratio": "9:16",
+                "resolution_profile": "standard",
                 "images": [
                     {"type": "character", "id": "char-1", "name": "陆远", "file_id": "file-1"},
                 ],

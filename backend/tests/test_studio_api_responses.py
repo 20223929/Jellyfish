@@ -70,6 +70,13 @@ class _FakeStudioDB:
             return
         raise TypeError(f"Unsupported object type: {type(obj)!r}")
 
+    async def execute(self, _stmt):  # noqa: ANN001
+        class _EmptyResult:
+            def all(self) -> list[tuple]:
+                return []
+
+        return _EmptyResult()
+
 
 def _override_db(db: _FakeStudioDB):
     async def _get_db() -> AsyncGenerator[_FakeStudioDB, None]:
@@ -181,9 +188,8 @@ def test_project_style_options_returns_grouped_choices(client: TestClient) -> No
     assert "视觉" in body["data"]["visual_styles"][0]["label"] or body["data"]["visual_styles"][0]["value"] in {"现实", "动漫"}
     assert "现实" in body["data"]["styles_by_visual_style"]
     assert "动漫" in body["data"]["styles_by_visual_style"]
-    assert "16:9" in [item["value"] for item in body["data"]["video_ratios"]]
-    assert body["data"]["default_video_ratio"] == "16:9"
-    assert body["data"]["default_video_size"] == "1920x1080"
+    assert "video_ratios" not in body["data"]
+    assert "default_video_ratio" not in body["data"]
 
 
 def test_create_project_rejects_invalid_style_combo(client: TestClient) -> None:

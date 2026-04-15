@@ -7,6 +7,17 @@ from dataclasses import dataclass
 from app.core.contracts.image_generation import ImageGenerationInput
 from app.core.contracts.provider import ProviderKey
 
+DEFAULT_VIDEO_REFERENCE_RATIO_SIZE_MAP: dict[str, dict[str, str]] = {
+    "16:9": {"standard": "1792x1024", "high": "2048x1152"},
+    "4:3": {"standard": "1536x1152", "high": "2048x1536"},
+    "1:1": {"standard": "1024x1024", "high": "1536x1536"},
+    "3:2": {"standard": "1536x1024", "high": "2048x1365"},
+    "2:3": {"standard": "1024x1536", "high": "1365x2048"},
+    "3:4": {"standard": "1152x1536", "high": "1536x2048"},
+    "9:16": {"standard": "1024x1792", "high": "1152x2048"},
+    "21:9": {"standard": "2048x896", "high": "2304x1024"},
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ImageModelCapability:
@@ -15,6 +26,9 @@ class ImageModelCapability:
     supports_seed: bool = True
     supports_watermark: bool = True
     allowed_sizes: set[str] | None = None
+    supported_ratios: set[str] | None = None
+    default_resolution_profile: str | None = "standard"
+    ratio_size_profiles: dict[str, dict[str, str]] | None = None
     min_n: int | None = 1
     max_n: int | None = 10
 
@@ -59,6 +73,45 @@ def resolve_image_capability(*, provider: ProviderKey, model: str | None) -> Ima
     from app.core.integrations.volcengine.image_capabilities import resolve_volcengine_image_capability
 
     return resolve_volcengine_image_capability(model)
+
+
+def resolve_image_size(
+    *,
+    provider: ProviderKey,
+    model: str | None,
+    purpose: str,
+    target_ratio: str | None,
+    resolution_profile: str | None,
+    requested_size: str | None,
+) -> str | None:
+    """解析图片最终 size。
+
+    普通图片任务优先保留显式传入的 requested_size；
+    视频参考帧场景则优先根据 target_ratio + resolution_profile 从 capability 推导，
+    以保证关键帧与目标视频画幅保持一致。
+    """
+    if purpose != "video_reference":
+        return requested_size
+
+    ratio = (target_ratio or "").strip()
+    if not ratio:
+        return requested_size
+
+    cap = resolve_image_capability(provider=provider, model=model)
+    if cap.supported_ratios is not None and ratio not in cap.supported_ratios:
+        raise ValueError(
+            f"Unsupported target_ratio for provider={provider} model={model or '<default>'}: {ratio}. "
+            f"Allowed: {sorted(cap.supported_ratios)}"
+        )
+
+    profile = (resolution_profile or cap.default_resolution_profile or "standard").strip() or "standard"
+    profiles = cap.ratio_size_profiles or DEFAULT_VIDEO_REFERENCE_RATIO_SIZE_MAP
+    size = profiles.get(ratio, {}).get(profile)
+    if size:
+        return size
+
+    fallback_profiles = DEFAULT_VIDEO_REFERENCE_RATIO_SIZE_MAP.get(ratio, {})
+    return fallback_profiles.get(profile) or fallback_profiles.get("standard") or requested_size
 
 
 def validate_image_options(

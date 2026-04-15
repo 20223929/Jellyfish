@@ -11,6 +11,7 @@ from app.schemas.llm import ModelCreate, ModelSettingsUpdate, ModelUpdate, Provi
 from app.services.llm.manage import (
     create_model,
     create_provider,
+    get_image_generation_options,
     get_or_create_settings,
     list_models_paginated,
     update_model,
@@ -210,4 +211,41 @@ async def test_update_model_rejects_switch_to_unsupported_provider_category_comb
             )
         assert exc_info.value.status_code == 400
         assert "does not support category=video" in str(exc_info.value.detail)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_get_image_generation_options_uses_default_image_model_capability() -> None:
+    db, engine = await _build_session()
+    async with db:
+        await create_provider(
+            db,
+            body=ProviderCreate(
+                id="p-volc",
+                name="火山引擎",
+                base_url="https://ark.cn-beijing.volces.com/api/v3",
+                api_key="k",
+            ),
+        )
+        await create_model(
+            db,
+            body=ModelCreate(
+                id="m-image-default",
+                name="seedream-4.0",
+                category=ModelCategoryKey.image,
+                provider_id="p-volc",
+            ),
+        )
+        await update_model_settings(
+            db,
+            body=ModelSettingsUpdate(default_image_model_id="m-image-default"),
+        )
+
+        options = await get_image_generation_options(db)
+
+        assert options.provider == "volcengine"
+        assert options.model_id == "m-image-default"
+        assert options.default_resolution_profile == "standard"
+        assert options.ratio_size_profiles["9:16"]["standard"] == "1600x2848"
+        assert options.ratio_size_profiles["21:9"]["high"] == "4704x2016"
     await engine.dispose()

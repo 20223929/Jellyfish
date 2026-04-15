@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.contracts.image_generation import ImageResolutionProfile, ImageTargetRatio
 from app.dependencies import get_db
 from app.models.studio import (
     ShotDetail,
@@ -100,6 +101,14 @@ class ShotFrameImageTaskRequest(BaseModel):
             "参考资产条目列表（可多张，顺序有效）。后端会使用 item.file_id 作为参考图；"
             "无效条目会被跳过。"
         ),
+    )
+    target_ratio: ImageTargetRatio = Field(
+        ...,
+        description="目标视频画幅比例；关键帧将按该画幅生成，以提升后续视频参考稳定性",
+    )
+    resolution_profile: ImageResolutionProfile | None = Field(
+        "standard",
+        description="关键帧输出分辨率档位，默认 standard",
     )
 
 
@@ -386,6 +395,9 @@ async def create_shot_frame_image_generation_task(
         relation_entity_id=str(shot_frame_image.id),
         prompt=submission.prompt,
         images=ref_images if ref_images else None,
+        target_ratio=body.target_ratio,
+        resolution_profile=body.resolution_profile,
+        purpose="video_reference",
         render_context=submission_extra.get("render_context"),
     )
     return created_response(TaskCreated(task_id=task_id))

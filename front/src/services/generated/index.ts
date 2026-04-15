@@ -18,6 +18,7 @@ export type { ApiResponse_EntityNameExistenceCheckResponse_ } from './models/Api
 export type { ApiResponse_FileDetailRead_ } from './models/ApiResponse_FileDetailRead_';
 export type { ApiResponse_FileRead_ } from './models/ApiResponse_FileRead_';
 export type { ApiResponse_GenerationTaskLinkRead_ } from './models/ApiResponse_GenerationTaskLinkRead_';
+export type { ApiResponse_ImageGenerationOptionsRead_ } from './models/ApiResponse_ImageGenerationOptionsRead_';
 export type { ApiResponse_list_PromptCategoryOptionRead__ } from './models/ApiResponse_list_PromptCategoryOptionRead__';
 export type { ApiResponse_list_ProviderSupportedRead__ } from './models/ApiResponse_list_ProviderSupportedRead__';
 export type { ApiResponse_list_ShotCharacterLinkRead__ } from './models/ApiResponse_list_ShotCharacterLinkRead__';
@@ -75,6 +76,7 @@ export type { ApiResponse_TaskLinkAdoptRead_ } from './models/ApiResponse_TaskLi
 export type { ApiResponse_TaskResultRead_ } from './models/ApiResponse_TaskResultRead_';
 export type { ApiResponse_TaskStatusRead_ } from './models/ApiResponse_TaskStatusRead_';
 export type { ApiResponse_VariantAnalysisResult_ } from './models/ApiResponse_VariantAnalysisResult_';
+export type { ApiResponse_VideoGenerationOptionsRead_ } from './models/ApiResponse_VideoGenerationOptionsRead_';
 export type { ApiResponse_VideoPromptPreviewResponse_ } from './models/ApiResponse_VideoPromptPreviewResponse_';
 export type { AsyncTaskCreateRead } from './models/AsyncTaskCreateRead';
 export type { Body_upload_file_api_api_v1_studio_files_upload_post } from './models/Body_upload_file_api_api_v1_studio_files_upload_post';
@@ -111,6 +113,7 @@ export type { GenerationTaskLinkCreate } from './models/GenerationTaskLinkCreate
 export type { GenerationTaskLinkRead } from './models/GenerationTaskLinkRead';
 export type { GenerationTaskLinkUpdate } from './models/GenerationTaskLinkUpdate';
 export type { HTTPValidationError } from './models/HTTPValidationError';
+export type { ImageGenerationOptionsRead } from './models/ImageGenerationOptionsRead';
 export type { LogLevel } from './models/LogLevel';
 export type { ModelCategoryKey } from './models/ModelCategoryKey';
 export type { ModelCreate } from './models/ModelCreate';
@@ -238,6 +241,7 @@ export type { VariantAnalysisRequest } from './models/VariantAnalysisRequest';
 export type { VariantAnalysisResult } from './models/VariantAnalysisResult';
 export type { VariantSuggestion } from './models/VariantSuggestion';
 export type { VFXType } from './models/VFXType';
+export type { VideoGenerationOptionsRead } from './models/VideoGenerationOptionsRead';
 export type { VideoGenerationTaskRequest } from './models/VideoGenerationTaskRequest';
 export type { VideoPromptPreviewResponse } from './models/VideoPromptPreviewResponse';
 

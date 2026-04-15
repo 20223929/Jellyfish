@@ -60,6 +60,7 @@ import {
 import { useLocation, useParams, Link } from 'react-router-dom'
 import {
   FilmService,
+  LlmService,
   StudioChaptersService,
   StudioEntitiesService,
   StudioFilesService,
@@ -79,6 +80,7 @@ import type {
   CameraShotType,
   ChapterRead,
   EntityNameExistenceItem,
+  ImageGenerationOptionsRead,
   ProjectActorLinkRead,
   ProjectCostumeLinkRead,
   ShotDetailRead,
@@ -110,6 +112,7 @@ import { useGenerationDraft, type GenerationDraftState } from '../hooks/useGener
 import { useTaskPageContext } from '../components/taskPageContext'
 import type { RelationTaskState } from '../project/ProjectWorkbench/chapterDivisionTasks'
 import { toRelationTaskStateFromStatusRead } from '../project/ProjectWorkbench/chapterDivisionTasks'
+import { useProjectStyleOptions } from '../project/useProjectStyleOptions'
 import './chapterStudio.separation.css'
 
 const { Sider, Content } = Layout
@@ -192,6 +195,8 @@ type KeyframeCardState = {
   applyingFileId: string | null
 }
 
+type KeyframeResolutionProfile = 'standard' | 'high'
+
 type InspectorTabKey = 'ops' | 'camera' | 'prompt_image' | 'dialogue' | 'keyframe_gen' | 'gen_ref'
 
 const LAYOUT_STORAGE_KEY = 'jellyfish_chapter_studio_layout_v1'
@@ -203,6 +208,22 @@ function clamp(n: number, min: number, max: number) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function getResolutionProfileLabel(profile: KeyframeResolutionProfile): string {
+  return profile === 'high' ? '高清（3K）' : '标准（2K）'
+}
+
+function resolveKeyframePixelSize(
+  options: ImageGenerationOptionsRead | null,
+  ratio: string,
+  profile: KeyframeResolutionProfile,
+): string {
+  const normalizedRatio = String(ratio ?? '').trim()
+  if (!options || !normalizedRatio) return ''
+  const profiles = options.ratio_size_profiles?.[normalizedRatio] ?? null
+  if (!profiles) return ''
+  return profiles[profile] ?? profiles.standard ?? ''
 }
 
 function mapGenerationDraftStateToRenderState(
@@ -395,6 +416,9 @@ const ChapterStudio: React.FC = () => {
   const [chapter, setChapter] = useState<Chapter | null>(null)
   const [projectVisualStyle, setProjectVisualStyle] = useState<'现实' | '动漫'>('现实')
   const [projectStyle, setProjectStyle] = useState<string>('真人都市')
+  const [projectDefaultVideoRatio, setProjectDefaultVideoRatio] = useState<string>('')
+  const { videoRatioOptions, defaultVideoRatio: capabilityDefaultVideoRatio } = useProjectStyleOptions()
+  const [imageGenerationOptions, setImageGenerationOptions] = useState<ImageGenerationOptionsRead | null>(null)
   const [shots, setShots] = useState<StudioShot[]>([])
   const [shotRuntimeMap, setShotRuntimeMap] = useState<Record<string, ShotRuntimeState>>({})
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
@@ -430,6 +454,7 @@ const ChapterStudio: React.FC = () => {
   const [promptAssetsUpdating, setPromptAssetsUpdating] = useState(false)
 
   const [frameTab, setFrameTab] = useState<'head' | 'keyframes' | 'tail' | 'compare'>('keyframes')
+  const [keyframeResolutionProfile, setKeyframeResolutionProfile] = useState<KeyframeResolutionProfile>('standard')
   const [frameFileTagsMap, setFrameFileTagsMap] = useState<Record<string, string[]>>({})
   const [frameFileTagsLoading, setFrameFileTagsLoading] = useState(false)
   const [playbackRate, setPlaybackRate] = useState(1)
@@ -447,6 +472,23 @@ const ChapterStudio: React.FC = () => {
   const [dragOverShotId, setDragOverShotId] = useState<string | null>(null)
   const [isResizing, setIsResizing] = useState(false)
 
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const res = await LlmService.getImageGenerationOptionsApiV1LlmImageGenerationOptionsGet()
+        if (!active) return
+        setImageGenerationOptions(res.data ?? null)
+      } catch {
+        if (!active) return
+        setImageGenerationOptions(null)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
   const containerRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<null | { type: 'left' | 'right'; startX: number; startLeft: number; startRight: number }>(null)
   const resizeRafRef = useRef<number | null>(null)
@@ -454,6 +496,15 @@ const ChapterStudio: React.FC = () => {
   const showPreviewMinimizeButton = false
   const showPreviewFrameSegmented = false
   const showChapterTimeline = false
+  const resolveShotVideoRatio = useCallback(
+    (detail?: ShotDetailRead | null) => {
+      const shotRatio = String(detail?.override_video_ratio ?? '').trim()
+      const projectRatio = String(projectDefaultVideoRatio ?? '').trim()
+      const fallbackRatio = String(capabilityDefaultVideoRatio ?? '').trim()
+      return shotRatio || projectRatio || fallbackRatio
+    },
+    [capabilityDefaultVideoRatio, projectDefaultVideoRatio],
+  )
 
   const hiddenKey = useMemo(() => (chapterId ? `jellyfish_hidden_shots_${chapterId}` : null), [chapterId])
   const hiddenIds = useMemo(() => {
@@ -621,15 +672,18 @@ const ChapterStudio: React.FC = () => {
       setChapter(toUIChapter(data))
       const nextVisualStyle = projectRes?.data?.visual_style
       const nextStyle = projectRes?.data?.style
+      const nextDefaultRatio = typeof projectRes?.data?.default_video_ratio === 'string' ? projectRes.data.default_video_ratio : ''
       if (nextVisualStyle === '现实' || nextVisualStyle === '动漫') {
         setProjectVisualStyle(nextVisualStyle)
       }
       if (typeof nextStyle === 'string' && nextStyle.trim()) {
         setProjectStyle(nextStyle)
       }
+      setProjectDefaultVideoRatio(nextDefaultRatio)
     } catch {
       // 章节信息仅用于标题展示，失败不阻断工作台
       setChapter(null)
+      setProjectDefaultVideoRatio('')
     }
   }
 
@@ -1037,13 +1091,22 @@ const ChapterStudio: React.FC = () => {
               : null
           })
           .filter(Boolean)
+        const targetRatio = resolveShotVideoRatio(d)
+        if (!targetRatio) continue
         await StudioImageTasksService.createShotFrameImageGenerationTaskApiV1StudioImageTasksShotShotIdFrameImageTasksPost({
           shotId: id,
-          requestBody: { frame_type: target.frame_type as any, model_id: null, prompt, images: imagesPayload } as any,
+          requestBody: {
+            frame_type: target.frame_type as any,
+            model_id: null,
+            prompt,
+            images: imagesPayload,
+            target_ratio: targetRatio,
+            resolution_profile: keyframeResolutionProfile,
+          } as any,
         })
       }
     },
-    [],
+    [keyframeResolutionProfile, resolveShotVideoRatio],
   )
 
   const updatePromptProps = async (propIds: string[]) => {
@@ -1205,9 +1268,21 @@ const ChapterStudio: React.FC = () => {
             : null
         })
         .filter(Boolean)
+      const targetRatio = resolveShotVideoRatio(shotDetail)
+      if (!targetRatio) {
+        message.warning('请先设置视频比例')
+        return
+      }
       await StudioImageTasksService.createShotFrameImageGenerationTaskApiV1StudioImageTasksShotShotIdFrameImageTasksPost({
         shotId: selectedShotId,
-        requestBody: { frame_type: target.frame_type as any, model_id: null, prompt, images: imagesPayload } as any,
+        requestBody: {
+          frame_type: target.frame_type as any,
+          model_id: null,
+          prompt,
+          images: imagesPayload,
+          target_ratio: targetRatio,
+          resolution_profile: keyframeResolutionProfile,
+        } as any,
       })
       message.success('已创建生成任务')
     } catch {
@@ -1344,6 +1419,7 @@ const ChapterStudio: React.FC = () => {
       assignIfChanged('atmosphere')
       assignIfChanged('follow_atmosphere')
       assignIfChanged('has_bgm')
+      assignIfChanged('override_video_ratio')
       assignIfChanged('vfx_type')
       assignIfChanged('vfx_note')
       assignIfChanged('first_frame_prompt')
@@ -2525,10 +2601,16 @@ const ChapterStudio: React.FC = () => {
               }}
             >
               <Inspector
-                    projectId={projectId}
+                projectId={projectId}
                 chapterId={chapterId}
                 projectVisualStyle={projectVisualStyle}
                 projectStyle={projectStyle}
+                projectDefaultVideoRatio={projectDefaultVideoRatio}
+                capabilityDefaultVideoRatio={capabilityDefaultVideoRatio}
+                videoRatioOptions={videoRatioOptions}
+                imageGenerationOptions={imageGenerationOptions}
+                keyframeResolutionProfile={keyframeResolutionProfile}
+                onChangeKeyframeResolutionProfile={setKeyframeResolutionProfile}
                 loadingDetail={loadingDetail}
                 shotDetail={shotDetail}
                 dialogLines={dialogLines}
@@ -2597,6 +2679,12 @@ const ChapterStudio: React.FC = () => {
                     chapterId={chapterId}
                     projectVisualStyle={projectVisualStyle}
                     projectStyle={projectStyle}
+                    projectDefaultVideoRatio={projectDefaultVideoRatio}
+                    capabilityDefaultVideoRatio={capabilityDefaultVideoRatio}
+                    videoRatioOptions={videoRatioOptions}
+                    imageGenerationOptions={imageGenerationOptions}
+                    keyframeResolutionProfile={keyframeResolutionProfile}
+                    onChangeKeyframeResolutionProfile={setKeyframeResolutionProfile}
                     loadingDetail={loadingDetail}
                     shotDetail={shotDetail}
                     dialogLines={dialogLines}
@@ -2735,6 +2823,12 @@ function Inspector(props: {
   chapterId?: string
   projectVisualStyle: '现实' | '动漫'
   projectStyle: string
+  projectDefaultVideoRatio: string
+  capabilityDefaultVideoRatio: string
+  videoRatioOptions: Array<{ value: string; label: React.ReactNode }>
+  imageGenerationOptions: ImageGenerationOptionsRead | null
+  keyframeResolutionProfile: KeyframeResolutionProfile
+  onChangeKeyframeResolutionProfile: (value: KeyframeResolutionProfile) => void
   loadingDetail: boolean
   shotDetail: ShotDetailRead | null
   dialogLines: ShotDialogLineRead[]
@@ -2768,6 +2862,12 @@ function Inspector(props: {
     chapterId,
     projectVisualStyle,
     projectStyle,
+    projectDefaultVideoRatio,
+    capabilityDefaultVideoRatio,
+    videoRatioOptions,
+    imageGenerationOptions,
+    keyframeResolutionProfile,
+    onChangeKeyframeResolutionProfile,
     loadingDetail,
     shotDetail,
     dialogLines,
@@ -2855,6 +2955,18 @@ function Inspector(props: {
   const [videoPromptPreviewOpen, setVideoPromptPreviewOpen] = useState(false)
   const [videoPromptPreviewLoading, setVideoPromptPreviewLoading] = useState(false)
   const [videoPromptPreviewSubmitting, setVideoPromptPreviewSubmitting] = useState(false)
+  const resolveVideoRatioForRequest = useCallback(() => {
+    const shotRatio = String(shotDetail?.override_video_ratio ?? '').trim()
+    const projectRatio = String(projectDefaultVideoRatio ?? '').trim()
+    const fallbackRatio = String(capabilityDefaultVideoRatio ?? '').trim()
+    return shotRatio || projectRatio || fallbackRatio
+  }, [capabilityDefaultVideoRatio, projectDefaultVideoRatio, shotDetail?.override_video_ratio])
+  const resolvedKeyframeRatio = resolveVideoRatioForRequest()
+  const resolvedKeyframePixelSize = resolveKeyframePixelSize(
+    imageGenerationOptions,
+    resolvedKeyframeRatio,
+    keyframeResolutionProfile,
+  )
   const videoPromptDraft = useGenerationDraft<
     { prompt: string },
     { referenceMode: VideoReferenceMode; images: string[] },
@@ -2867,12 +2979,17 @@ function Inspector(props: {
       if (!selectedShot?.id) {
         throw new Error('shot is required')
       }
+      const ratio = resolveVideoRatioForRequest()
+      if (!ratio) {
+        throw new Error('video ratio is required')
+      }
       const res = await FilmService.previewVideoGenerationPromptApiV1FilmTasksVideoPreviewPromptPost({
         requestBody: {
           shot_id: selectedShot.id,
           reference_mode: context.referenceMode,
           prompt: (base.prompt || '').trim() || null,
           images: context.images,
+          ratio,
         } as any,
       })
       const data = res.data as any
@@ -2885,12 +3002,17 @@ function Inspector(props: {
       if (!selectedShot?.id) {
         throw new Error('shot is required')
       }
+      const ratio = resolveVideoRatioForRequest()
+      if (!ratio) {
+        throw new Error('video ratio is required')
+      }
       const created = await FilmService.createVideoGenerationTaskApiV1FilmTasksVideoPost({
         requestBody: {
           shot_id: selectedShot.id,
           reference_mode: context.referenceMode,
           prompt: (derived.prompt || '').trim(),
           images: derived.images,
+          ratio,
         } as any,
       })
       return {
@@ -3590,6 +3712,10 @@ function Inspector(props: {
               }
             })
 
+      const ratio = resolveVideoRatioForRequest()
+      if (!ratio) {
+        throw new Error('video ratio is required')
+      }
       const created = await StudioImageTasksService.createShotFrameImageGenerationTaskApiV1StudioImageTasksShotShotIdFrameImageTasksPost({
         shotId: selectedShot.id,
         requestBody: {
@@ -3597,6 +3723,8 @@ function Inspector(props: {
           model_id: null,
           prompt: (base.prompt || '').trim(),
           images: resolvedItems as any,
+          target_ratio: ratio,
+          resolution_profile: keyframeResolutionProfile,
         } as any,
       })
       return {
@@ -3652,6 +3780,7 @@ function Inspector(props: {
     },
     [
       keyframePromptDraft,
+      keyframeResolutionProfile,
       keyframePromptPreviewDraft,
       keyframePromptPreviewFrameType,
       keyframePromptPreviewRefFileIds,
@@ -4018,6 +4147,10 @@ function Inspector(props: {
   const submitVideoGeneration = async () => {
     if (!selectedShot?.id) {
       message.warning('请先选择一个分镜')
+      return
+    }
+    if (!resolveVideoRatioForRequest()) {
+      message.warning('当前镜头缺少视频比例，请先设置项目默认比例或镜头覆盖比例')
       return
     }
     const prompt = (videoPromptPreviewDraft || '').trim()
@@ -4553,6 +4686,23 @@ function Inspector(props: {
                               />
                             </div>
                           </div>
+                          <div>
+                            <div className="text-gray-500 text-xs mb-1">视频比例</div>
+                            <Select
+                              size="small"
+                              allowClear
+                              value={shotDetail.override_video_ratio ?? undefined}
+                              placeholder={projectDefaultVideoRatio || capabilityDefaultVideoRatio || '请选择视频比例'}
+                              options={videoRatioOptions}
+                              onChange={(value) => {
+                                onPatchShotDetail({ override_video_ratio: value ?? null })
+                              }}
+                              disabled={cameraUpdating}
+                            />
+                            <div className="mt-1 text-[11px] text-gray-400">
+                              当前生效：{resolveVideoRatioForRequest() || '未设置'}
+                            </div>
+                          </div>
                         </div>
                       </div>
 
@@ -4714,6 +4864,38 @@ function Inspector(props: {
               label: '关键帧与参考图',
               children: (
                 <div className="space-y-3">
+                  <div className="cs-group">
+                    <div className="cs-group-title">
+                      <SettingOutlined /> 关键帧规格
+                    </div>
+                    <div className="text-xs text-gray-500 mb-2">
+                      关键帧会跟随当前视频比例生成；这里控制参考帧分辨率档位。
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="min-w-[96px] text-xs text-gray-500">分辨率档位</div>
+                      <Select
+                        size="small"
+                        value={keyframeResolutionProfile}
+                        style={{ width: 160 }}
+                        options={[
+                          { value: 'standard', label: '标准（2K）' },
+                          { value: 'high', label: '高清（3K）' },
+                        ]}
+                        onChange={(value) => onChangeKeyframeResolutionProfile(value as KeyframeResolutionProfile)}
+                      />
+                    </div>
+                    <div className="mt-2 rounded bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                      <div>
+                        当前规格：{resolvedKeyframeRatio || '未设置比例'} ·{' '}
+                        {getResolutionProfileLabel(keyframeResolutionProfile)}
+                        {resolvedKeyframePixelSize ? ` → ${resolvedKeyframePixelSize}` : ''}
+                      </div>
+                      <div className="mt-1 text-gray-500">
+                        当前模型：{imageGenerationOptions?.provider || '未识别供应商'}
+                        {imageGenerationOptions?.model_name ? ` / ${imageGenerationOptions.model_name}` : ''}
+                      </div>
+                    </div>
+                  </div>
                   {(['first', 'key', 'last'] as PromptFrameType[]).map((ft) => {
                     const st = keyframeCards[ft]
                     const slot = frameImages.find((x) => x.frame_type === ft)

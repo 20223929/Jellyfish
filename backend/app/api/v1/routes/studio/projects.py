@@ -32,10 +32,6 @@ from app.schemas.studio.projects import (
 router = APIRouter()
 
 PROJECT_ORDER_FIELDS = {"name", "created_at", "updated_at", "progress"}
-VIDEO_RATIO_OPTIONS = ("16:9", "4:3", "1:1", "3:4", "9:16", "21:9")
-VIDEO_SIZE_OPTIONS = ("1920x1080", "1280x720", "1080x1920", "720x1280", "1024x1024")
-DEFAULT_VIDEO_RATIO = "16:9"
-DEFAULT_VIDEO_SIZE = "1920x1080"
 
 
 def _build_project_style_options() -> tuple[dict[ProjectVisualStyle, list[ProjectStyle]], dict[ProjectVisualStyle, ProjectStyle]]:
@@ -68,9 +64,10 @@ def _validate_project_style_combo(*, visual_style: ProjectVisualStyle, style: Pr
 @router.get(
     "/style-options",
     response_model=ApiResponse[ProjectStyleOptionsRead],
-    summary="获取项目风格与视频参数候选项",
+    summary="获取项目风格候选项",
 )
-async def get_project_style_options() -> ApiResponse[ProjectStyleOptionsRead]:
+async def get_project_style_options(
+) -> ApiResponse[ProjectStyleOptionsRead]:
     mapping, defaults = _build_project_style_options()
     data = ProjectStyleOptionsRead(
         visual_styles=[StyleOption(value=x.value, label=x.value) for x in ProjectVisualStyle],
@@ -79,10 +76,6 @@ async def get_project_style_options() -> ApiResponse[ProjectStyleOptionsRead]:
             for visual, styles in mapping.items()
         },
         default_style_by_visual_style={visual.value: style.value for visual, style in defaults.items()},
-        default_video_ratio=DEFAULT_VIDEO_RATIO,
-        default_video_size=DEFAULT_VIDEO_SIZE,
-        video_ratios=[StyleOption(value=x, label=x) for x in VIDEO_RATIO_OPTIONS],
-        video_sizes=[StyleOption(value=x, label=x) for x in VIDEO_SIZE_OPTIONS],
     )
     return success_response(data)
 

@@ -65,7 +65,6 @@ async def create_video_generation_task(
         reference_mode=body.reference_mode,
         prompt=body.prompt,
         images=body.images,
-        size=body.size,
         ratio=body.ratio,
     )
 

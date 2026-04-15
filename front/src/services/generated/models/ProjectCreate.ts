@@ -34,10 +34,6 @@ export type ProjectCreate = {
      */
     progress?: number;
     /**
-     * 项目级默认视频尺寸；分镜未覆盖时生效
-     */
-    default_video_size?: (string | null);
-    /**
      * 项目级默认视频比例；分镜未覆盖时生效
      */
     default_video_ratio?: (string | null);

@@ -23,12 +23,8 @@ export type VideoGenerationTaskRequest = {
      */
     images?: Array<string>;
     /**
-     * 分辨率（可选），如 720x1280
+     * 视频画幅比例，如 16:9 / 9:16
      */
-    size?: (string | null);
-    /**
-     * 画幅比例（可选），如 16:9 / 9:16
-     */
-    ratio?: (string | null);
+    ratio: '16:9' | '4:3' | '1:1' | '3:4' | '9:16' | '21:9';
 };
 

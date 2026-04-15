@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.integrations.openai.video_capabilities import validate_openai_video_options
-from app.core.integrations.video_capabilities import resolve_effective_ratio
+from app.core.integrations.video_capabilities import derive_provider_size, resolve_effective_ratio
 from app.core.contracts.video_generation import VideoGenerationInput, _strip_optional_b64
 
 
@@ -33,8 +33,9 @@ def build_create_video_body(input_: VideoGenerationInput) -> dict[str, Any]:
     body: dict[str, Any] = {"prompt": input_.prompt or ""}
     if input_.model:
         body["model"] = input_.model
-    if input_.size:
-        body["size"] = input_.size
+    size = derive_provider_size(provider="openai", model=input_.model, ratio=input_.ratio)
+    if size:
+        body["size"] = size
     if input_.seconds is not None:
         body["seconds"] = str(int(input_.seconds))
     effective_ratio = resolve_effective_ratio(input_)

@@ -20,7 +20,6 @@ class ProjectBase(BaseModel):
     seed: int = Field(0, description="随机种子")
     unify_style: bool = Field(True, description="是否统一风格")
     progress: int = Field(0, description="进度百分比（0-100）")
-    default_video_size: str | None = Field(None, description="项目级默认视频尺寸；分镜未覆盖时生效")
     default_video_ratio: str | None = Field(None, description="项目级默认视频比例；分镜未覆盖时生效")
     stats: dict[str, Any] = Field(default_factory=dict, description="聚合统计（JSON）")
 
@@ -37,7 +36,6 @@ class ProjectUpdate(BaseModel):
     seed: int | None = None
     unify_style: bool | None = None
     progress: int | None = None
-    default_video_size: str | None = None
     default_video_ratio: str | None = None
     stats: dict[str, Any] | None = None
 
@@ -89,7 +87,7 @@ class StyleOption(BaseModel):
 
 
 class ProjectStyleOptionsRead(BaseModel):
-    """项目风格与视频参数候选项。"""
+    """项目风格候选项。"""
 
     visual_styles: list[StyleOption] = Field(default_factory=list, description="视觉风格可选项")
     styles_by_visual_style: dict[str, list[StyleOption]] = Field(
@@ -100,13 +98,3 @@ class ProjectStyleOptionsRead(BaseModel):
         default_factory=dict,
         description="各视觉风格默认视频风格",
     )
-    default_video_ratio: str | None = Field(
-        None,
-        description="默认视频比例（用于创建项目时的初始值）",
-    )
-    default_video_size: str | None = Field(
-        None,
-        description="默认视频尺寸（用于创建项目时的初始值）",
-    )
-    video_ratios: list[StyleOption] = Field(default_factory=list, description="视频比例候选项")
-    video_sizes: list[StyleOption] = Field(default_factory=list, description="视频尺寸候选项")

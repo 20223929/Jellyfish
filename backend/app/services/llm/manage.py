@@ -8,8 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.utils import apply_keyword_filter, apply_order, paginate
 from app.models.llm import Model, ModelCategoryKey, ModelSettings, Provider
+from app.core.integrations.image_capabilities import (
+    DEFAULT_VIDEO_REFERENCE_RATIO_SIZE_MAP,
+    resolve_image_capability,
+)
+from app.core.integrations.video_capabilities import resolve_default_ratio, resolve_video_capability
 from app.schemas.common import ApiResponse, PaginatedData, paginated_response
 from app.schemas.llm import (
+    ImageGenerationOptionsRead,
     ModelCreate,
     ModelRead,
     ModelSettingsUpdate,
@@ -17,6 +23,7 @@ from app.schemas.llm import (
     ProviderCreate,
     ProviderRead,
     ProviderSupportedRead,
+    VideoGenerationOptionsRead,
     ProviderUpdate,
 )
 from app.services.llm.provider_registry import (
@@ -274,6 +281,72 @@ async def update_model_settings(
     settings = await get_or_create_settings(db)
     patch_model(settings, body.model_dump())
     return await flush_and_refresh(db, settings)
+
+
+async def get_video_generation_options(
+    db: AsyncSession,
+) -> VideoGenerationOptionsRead:
+    """返回当前默认视频模型的动态 ratio 枚举。"""
+    settings = await get_or_create_settings(db)
+    model_id = settings.default_video_model_id
+    if not model_id:
+        return VideoGenerationOptionsRead(
+            provider="",
+            model_id="",
+            model_name="",
+            allowed_ratios=["16:9"],
+            default_ratio="16:9",
+        )
+
+    model = await get_or_404(db, Model, model_id, detail=entity_not_found("Model"))
+    provider = await get_or_404(db, Provider, model.provider_id, detail=entity_not_found("Provider"))
+    provider_key = resolve_provider_key_from_name(provider.name)
+    capability = resolve_video_capability(provider=provider_key, model=model.name)
+    allowed_ratios = sorted(capability.allowed_ratios or {"16:9"})
+    default_ratio = resolve_default_ratio(provider=provider_key, model=model.name) or allowed_ratios[0]
+    if default_ratio not in allowed_ratios:
+        allowed_ratios = sorted({*allowed_ratios, default_ratio})
+
+    return VideoGenerationOptionsRead(
+        provider=provider_key,
+        model_id=model.id,
+        model_name=model.name,
+        allowed_ratios=allowed_ratios,
+        default_ratio=default_ratio,
+    )
+
+
+async def get_image_generation_options(
+    db: AsyncSession,
+) -> ImageGenerationOptionsRead:
+    """返回当前默认图片模型对应的关键帧比例/像素规格选项。"""
+    settings = await get_or_create_settings(db)
+    model_id = settings.default_image_model_id
+    if not model_id:
+        return ImageGenerationOptionsRead(
+            provider="",
+            model_id="",
+            model_name="",
+            supported_ratios=sorted(DEFAULT_VIDEO_REFERENCE_RATIO_SIZE_MAP.keys()),
+            default_resolution_profile="standard",
+            ratio_size_profiles=DEFAULT_VIDEO_REFERENCE_RATIO_SIZE_MAP,
+        )
+
+    model = await get_or_404(db, Model, model_id, detail=entity_not_found("Model"))
+    provider = await get_or_404(db, Provider, model.provider_id, detail=entity_not_found("Provider"))
+    provider_key = resolve_provider_key_from_name(provider.name)
+    capability = resolve_image_capability(provider=provider_key, model=model.name)
+    ratio_size_profiles = capability.ratio_size_profiles or DEFAULT_VIDEO_REFERENCE_RATIO_SIZE_MAP
+    supported_ratios = sorted(capability.supported_ratios or ratio_size_profiles.keys())
+
+    return ImageGenerationOptionsRead(
+        provider=provider_key,
+        model_id=model.id,
+        model_name=model.name,
+        supported_ratios=supported_ratios,
+        default_resolution_profile=capability.default_resolution_profile or "standard",
+        ratio_size_profiles=ratio_size_profiles,
+    )
 
 
 def list_supported_providers(*, category: ModelCategoryKey | None) -> list[ProviderSupportedRead]:

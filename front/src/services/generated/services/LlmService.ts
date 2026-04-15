@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ApiResponse_ImageGenerationOptionsRead_ } from '../models/ApiResponse_ImageGenerationOptionsRead_';
 import type { ApiResponse_list_ProviderSupportedRead__ } from '../models/ApiResponse_list_ProviderSupportedRead__';
 import type { ApiResponse_ModelRead_ } from '../models/ApiResponse_ModelRead_';
 import type { ApiResponse_ModelSettingsRead_ } from '../models/ApiResponse_ModelSettingsRead_';
@@ -9,6 +10,7 @@ import type { ApiResponse_NoneType_ } from '../models/ApiResponse_NoneType_';
 import type { ApiResponse_PaginatedData_ModelRead__ } from '../models/ApiResponse_PaginatedData_ModelRead__';
 import type { ApiResponse_PaginatedData_ProviderRead__ } from '../models/ApiResponse_PaginatedData_ProviderRead__';
 import type { ApiResponse_ProviderRead_ } from '../models/ApiResponse_ProviderRead_';
+import type { ApiResponse_VideoGenerationOptionsRead_ } from '../models/ApiResponse_VideoGenerationOptionsRead_';
 import type { ModelCategoryKey } from '../models/ModelCategoryKey';
 import type { ModelCreate } from '../models/ModelCreate';
 import type { ModelSettingsUpdate } from '../models/ModelSettingsUpdate';
@@ -109,6 +111,28 @@ export class LlmService {
             errors: {
                 422: `Validation Error`,
             },
+        });
+    }
+    /**
+     * 获取当前默认图片模型的关键帧规格选项
+     * @returns ApiResponse_ImageGenerationOptionsRead_ Successful Response
+     * @throws ApiError
+     */
+    public static getImageGenerationOptionsApiV1LlmImageGenerationOptionsGet(): CancelablePromise<ApiResponse_ImageGenerationOptionsRead_> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/llm/image-generation-options',
+        });
+    }
+    /**
+     * 获取当前默认视频模型的动态比例选项
+     * @returns ApiResponse_VideoGenerationOptionsRead_ Successful Response
+     * @throws ApiError
+     */
+    public static getVideoGenerationOptionsApiV1LlmVideoGenerationOptionsGet(): CancelablePromise<ApiResponse_VideoGenerationOptionsRead_> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/llm/video-generation-options',
         });
     }
     /**

@@ -246,6 +246,9 @@ async def create_image_task_and_link(
     relation_entity_id: str,
     prompt: str,
     images: list[dict[str, str]] | None = None,
+    target_ratio: str | None = None,
+    resolution_profile: str | None = None,
+    purpose: str = "generic",
     render_context: dict | None = None,
 ) -> str:
     """创建图片生成任务，并建立任务关联。"""
@@ -264,6 +267,9 @@ async def create_image_task_and_link(
         "input": {
             "prompt": prompt,
             "model": model.name,
+            "target_ratio": target_ratio,
+            "resolution_profile": resolution_profile,
+            "purpose": purpose,
         },
     }
     if images:

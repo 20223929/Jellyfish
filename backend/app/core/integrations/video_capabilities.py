@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import gcd
 
 from app.core.contracts.provider import ProviderKey
-from app.core.contracts.video_generation import VideoGenerationInput
+from app.core.contracts.video_generation import VideoGenerationInput, VideoRatio
 
 ALLOWED_RATIOS = {"16:9", "4:3", "1:1", "3:4", "9:16", "21:9"}
+DEFAULT_RATIO_TO_SIZE_MAPPING: dict[str, str] = {
+    "16:9": "1280x720",
+    "4:3": "1024x768",
+    "1:1": "1024x1024",
+    "3:4": "768x1024",
+    "9:16": "720x1280",
+    "21:9": "1680x720",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +25,8 @@ class VideoModelCapability:
     supports_seed: bool = True
     supports_watermark: bool = True
     allowed_ratios: set[str] | None = None
-    allowed_sizes: set[str] | None = None
+    default_ratio: str | None = None
+    ratio_to_size_mapping: dict[str, str] | None = None
     min_seconds: int | None = 1
     max_seconds: int | None = None
 
@@ -65,32 +73,28 @@ def resolve_video_capability(*, provider: ProviderKey, model: str | None) -> Vid
     return resolve_volcengine_video_capability(model)
 
 
-def infer_ratio_from_size(size: str | None) -> str | None:
-    if not size:
-        return None
-    value = size.strip().lower()
-    if not value:
-        return None
-    if ":" in value:
-        return value if value in ALLOWED_RATIOS else None
-    if "x" not in value:
-        return None
-    left, right = value.split("x", 1)
-    if not left.isdigit() or not right.isdigit():
-        return None
-    width = int(left)
-    height = int(right)
-    if width <= 0 or height <= 0:
-        return None
-    factor = gcd(width, height)
-    ratio = f"{width // factor}:{height // factor}"
-    return ratio if ratio in ALLOWED_RATIOS else None
-
-
 def resolve_effective_ratio(input_: VideoGenerationInput) -> str | None:
-    if input_.ratio:
-        return input_.ratio
-    return infer_ratio_from_size(input_.size)
+    return input_.ratio
+
+
+def resolve_default_ratio(*, provider: ProviderKey, model: str | None) -> str | None:
+    cap = resolve_video_capability(provider=provider, model=model)
+    if cap.default_ratio:
+        return cap.default_ratio
+    if cap.allowed_ratios:
+        return sorted(cap.allowed_ratios)[0]
+    return "16:9"
+
+
+def derive_provider_size(
+    *,
+    provider: ProviderKey,
+    model: str | None,
+    ratio: VideoRatio,
+) -> str | None:
+    cap = resolve_video_capability(provider=provider, model=model)
+    mapping = cap.ratio_to_size_mapping or DEFAULT_RATIO_TO_SIZE_MAPPING
+    return mapping.get(ratio)
 
 
 def validate_video_options(
@@ -100,20 +104,10 @@ def validate_video_options(
     input_: VideoGenerationInput,
 ) -> None:
     cap = resolve_video_capability(provider=provider, model=model)
-    inferred_ratio = infer_ratio_from_size(input_.size)
     if input_.ratio and cap.allowed_ratios is not None and input_.ratio not in cap.allowed_ratios:
         raise ValueError(
             f"Unsupported ratio for provider={provider} model={model or '<default>'}: {input_.ratio}. "
             f"Allowed: {sorted(cap.allowed_ratios)}"
-        )
-    if input_.ratio and inferred_ratio and inferred_ratio != input_.ratio:
-        raise ValueError(
-            f"ratio conflicts with size: ratio={input_.ratio}, size={input_.size} (implies {inferred_ratio})"
-        )
-    if input_.size and cap.allowed_sizes is not None and input_.size not in cap.allowed_sizes:
-        raise ValueError(
-            f"Unsupported size for provider={provider} model={model or '<default>'}: {input_.size}. "
-            f"Allowed: {sorted(cap.allowed_sizes)}"
         )
     if input_.seconds is not None:
         if cap.min_seconds is not None and input_.seconds < cap.min_seconds:

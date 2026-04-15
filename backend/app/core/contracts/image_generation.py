@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.core.contracts.provider import ProviderKey
 
 ResponseFormat = Literal["url", "b64_json"]
+ImageTargetRatio = Literal["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "3:2", "2:3"]
+ImageResolutionProfile = Literal["standard", "high"]
+ImagePurpose = Literal["generic", "video_reference", "asset_image"]
 
 
 class InputImageRef(BaseModel):
@@ -43,6 +46,18 @@ class ImageGenerationInput(BaseModel):
         description="参考图片列表：存在时 OpenAI 走 /images/edits，火山映射为 image[]",
     )
     model: Optional[str] = Field(None, description="模型名称（如 gpt-image-1.5 / doubao-seedream-*）")
+    target_ratio: ImageTargetRatio | None = Field(
+        None,
+        description="目标画幅比例，用于视频参考帧等需要与视频构图对齐的场景",
+    )
+    resolution_profile: ImageResolutionProfile | None = Field(
+        None,
+        description="输出分辨率档位，如 standard / high；由供应商适配层映射为最终 size",
+    )
+    purpose: ImagePurpose = Field(
+        "generic",
+        description="生成用途，如 generic / video_reference / asset_image",
+    )
     size: Optional[str] = Field(
         None,
         description="分辨率，如 1024x1024 / 1024x1536 等；不同供应商可选项不同",
