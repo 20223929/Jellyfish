@@ -38,7 +38,9 @@ async def test_openai_video_create_returns_id(monkeypatch: pytest.MonkeyPatch) -
 
     _patch_httpx_client(monkeypatch, httpx.MockTransport(handler))
     cfg = ProviderConfig(provider="openai", api_key="sk-test")
-    inp = VideoGenerationInput(prompt="a cat", ratio="16:9", seed=42, watermark=False, seconds=6)
+    inp = VideoGenerationInput.model_validate(
+        {"prompt": "a cat", "ratio": "16:9", "seed": 42, "watermark": False, "seconds": 6}
+    )
     vid = await OpenAIVideoApiAdapter().create_video(cfg=cfg, input_=inp, timeout_s=30.0)
     assert vid == "video-1"
 
@@ -77,7 +79,9 @@ async def test_volcengine_video_create_and_get(monkeypatch: pytest.MonkeyPatch) 
 
     _patch_httpx_client(monkeypatch, httpx.MockTransport(handler))
     cfg = ProviderConfig(provider="volcengine", api_key="ak-test")
-    inp = VideoGenerationInput(prompt="舞", ratio="9:16", seconds=8, seed=7, watermark=True)
+    inp = VideoGenerationInput.model_validate(
+        {"prompt": "舞", "ratio": "9:16", "seconds": 8, "seed": 7, "watermark": True}
+    )
     tid = await VolcengineVideoApiAdapter().create_contents_task(cfg=cfg, input_=inp, timeout_s=30.0)
     assert tid == "t-1"
     meta = await VolcengineVideoApiAdapter().get_contents_task(cfg=cfg, task_id=tid, timeout_s=30.0)
@@ -86,7 +90,12 @@ async def test_volcengine_video_create_and_get(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_video_input_seed_bounds_validation() -> None:
-    VideoGenerationInput(prompt="ok", ratio="16:9", seed=-1)
-    VideoGenerationInput(prompt="ok", ratio="16:9", seed=4294967295)
+    # 边界值应可通过：-1 以及 uint32 最大值
+    VideoGenerationInput.model_validate({"prompt": "ok", "ratio": "16:9", "seed": -1})
+    VideoGenerationInput.model_validate({"prompt": "ok", "ratio": "16:9", "seed": 4294967295})
+
+    # 越界值应被拒绝：小于 -1 或大于 uint32 最大值
     with pytest.raises(ValidationError):
-        VideoGenerationInput(prompt="bad", ratio="16:9", seed=4294967296)
+        VideoGenerationInput.model_validate({"prompt": "bad", "ratio": "16:9", "seed": -2})
+    with pytest.raises(ValidationError):
+        VideoGenerationInput.model_validate({"prompt": "bad", "ratio": "16:9", "seed": 4294967296})
